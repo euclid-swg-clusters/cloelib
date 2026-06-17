@@ -487,8 +487,8 @@ class NumericalSelectionFunction:
 
         for ztab, z_slice in enumerate(prob_data["z_obs_bins_slices"]):
             for ltab, l_slice in enumerate(prob_data["lambda_obs_bins_slices"]):
-                window_ltrue[ztab, ltab, :, :] = np.trapz(
-                    np.trapz(
+                window_ltrue[ztab, ltab, :, :] = np.trapezoid(
+                    np.trapezoid(
         #         window_ltrue[ztab, ltab, :, :] = integrate.simpson(
         #             integrate.simpson(
                         integrand[z_slice, l_slice, :, :],
