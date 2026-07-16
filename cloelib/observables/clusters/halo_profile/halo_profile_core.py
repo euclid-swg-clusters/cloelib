@@ -99,7 +99,7 @@ class HaloProfileCore:
 
         return 1e-12 * sig_crit / self.background.h  # Msun pc^{-2} h
 
-    def n_zs_norM(self, z, zobsbin):
+    def n_zs_norM(self, z, zobsbin=None):
         r"""
         Galaxy number density normalization.
 
@@ -136,7 +136,7 @@ class HaloProfileCore:
     # n_s(z_gal_true) should depend on the source redshift, z_gal_true,
     # as well on the z_obs_bin (at least for tomobin selection).
     # The current implementation is not clear: z and self.z seem to be the same array
-    def n_zs(self, z, zobsbin):
+    def n_zs(self, z, zobsbin=None):
         r"""
         Galaxy number density.
 
