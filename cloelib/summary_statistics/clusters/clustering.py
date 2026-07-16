@@ -86,41 +86,39 @@ class ClusterClustering:
         ############################################
         # Get cluster statistics modeling quantities
         ############################################
-
-        # integral of P(z_obs|lambda_obs, z) on z_obs bins : (z_obs, lambda_obs, ztrue)
-        window_z_obs = self.cluster_statitstics_modeling.window_z_observed(
+        # P(lambda_obs_bin,z_obs_bin|M, z)
+        # Dimention: (z_obs_bin,lambda_obs_bin, ztrue, mass)
+        window_redshift_lambda_obs = self.cluster_statitstics_modeling.window_redshift_richness_observed(
             self.selection_function, z_obs_edges, lambda_obs_edges
         )
-        # integral of P(lambda_obs|M, z) on lambda_obs bins : (lambda_obs_edges, M, ztrue)
-        _window_lambda_obs = self.cluster_statitstics_modeling.window_richness_observed(
-            self.selection_function, lambda_obs_edges
-        )
-        # integral of P(lambda_obs|M, z)*dn/dM on lambda_obs bins and mass : (lambda_obs, ztrue)
+        # integral of P(lambda_obs_bin,z_obs_bin|M, z)*dn/dM over mass
+        # Dimension: (z_obs_bin,lambda_obs_bin, ztrue)
         window_lambda_obs_mass_integrated = (
             self.cluster_statitstics_modeling.integrate_probe_function_in_mass(
-                np.ones((1, 1)), _window_lambda_obs
+                np.ones((1, 1)), window_redshift_lambda_obs
             )
         )
-        # integral of P(lambda_obs|M, z)*dn/dM*bias on lambda_obs bins and mass : (lambda_obs, ztrue)
+        # integral of P(lambda_obs_bin,z_obs_bin|M, z)*dn/dM*bias over mass
+        # Dimension: (z_obs_bin,lambda_obs_bin, ztrue)
         halo_bias_in_window_lambda_obs_mass_integrated = (
             self.cluster_statitstics_modeling.integrate_probe_function_in_mass(
                 self.cluster_statitstics_modeling.tabulated_integrands["bias(ztrue,M)"],
-                _window_lambda_obs,
+                window_redshift_lambda_obs,
             )
         )
-        # cluster counts : (z_obs, lambda_obs)
+        # cluster counts
+        # Dimension: (z_obs_bin,lambda_obs_bin)
         cluster_counts = (
             self.cluster_statitstics_modeling.integrate_probe_function_in_redshift(
-                window_lambda_obs_mass_integrated, window_z_obs
+                window_lambda_obs_mass_integrated,
             )
         )
-
         ################################################
         # Computes radial shells for the 3D 2ptcf
         ################################################
 
-        # radial_shell_window : (z_obs, radius, k)
-        # radial_shell_volume : (z_obs, radius)
+        # radial_shell_window : (z_obs_bin, radius, k)
+        # radial_shell_volume : (z_obs_bin, radius)
         radial_shell_window, radial_shell_volume = (
             self.clustering.core.radial_shell_window_and_volume(
                 0.5 * (z_obs_edges[1:] + z_obs_edges[:-1]),
@@ -133,34 +131,47 @@ class ClusterClustering:
         ################################################
         # Computes the 3D two-point correlation function
         ################################################
-
-        # halo matter power spectrum + IR resummation : (lambda_obs, ztrue, k) dimension
-        _pk_halo = self.clustering.power_spectrum_RSD_corrected(
-            z=self.cluster_statitstics_modeling.tabulated_integrands["ztrue"],
-            k=self.cluster_statitstics_modeling.tabulated_integrands["k"],
-            z_obs_scatter=(
-                self.selection_function.scatter_z_obs(
+        # zero_denom = window_lambda_obs_mass_integrated == 0
+        # assert np.all(halo_bias_in_window_lambda_obs_mass_integrated[zero_denom] == 0), \
+        # "Found nonzero numerator with zero denominator!"
+        # Define effective bias; set to zero elements whose denominator and numerator are zeros.
+        beff = np.divide(
+            halo_bias_in_window_lambda_obs_mass_integrated,
+            window_lambda_obs_mass_integrated,
+            out=np.zeros_like(halo_bias_in_window_lambda_obs_mass_integrated, dtype=float),
+            where=window_lambda_obs_mass_integrated != 0,
+        ).transpose(2, 0, 1) # (ztrue, z_obs_bin, lambda_obs_bin)
+        zobs_scatter= self.selection_function.scatter_z_obs(
                     0.5 * (lambda_obs_edges[1:] + lambda_obs_edges[:-1])[np.newaxis, :],
                     self.cluster_statitstics_modeling.tabulated_integrands["ztrue"][
                         :, np.newaxis
-                    ],
+                    ], 
                 )
-            ),  # (ztrue, lambda_obs)
-            b_eff=(
-                halo_bias_in_window_lambda_obs_mass_integrated
-                / window_lambda_obs_mass_integrated
-            ).T,  # (ztrue, lambda_obs)
-        ).transpose(2, 0, 1)
+        # if zobs_scatter.shape != beff.shape:
+        #     assert zobs_scatter.shape == (beff.shape[0],beff.shape[2]), (
+        #     f"Cannot broadcast zobs_scatter shape {zobs_scatter.shape} "
+        #     f"to match beff shape {beff.shape}"
+        #     )
+        zobs_scatter = np.broadcast_to(zobs_scatter[:, np.newaxis, :], beff.shape)
+        # halo matter power spectrum + IR resummation
+        # Dimension: (z_obs_bin, lambda_obs_bin,z_true, k)
+        _pk_halo = self.clustering.power_spectrum_RSD_corrected(
+            z=self.cluster_statitstics_modeling.tabulated_integrands["ztrue"],
+            k=self.cluster_statitstics_modeling.tabulated_integrands["k"],
+            z_obs_scatter=zobs_scatter, 
+            b_eff=beff,  
+        ).transpose(2, 3, 0, 1)
 
-        # integrate the square root of power spectrum in redshift bins (z_obs, lambda_obs, k)
+        # integrate the square root of power spectrum in redshift bins
+        # Dimension: (z_obs_bin, lambda_obs_bin, k)
         _sqrt_pk_z_integrated = (
             self.cluster_statitstics_modeling.integrate_probe_function_in_redshift(
-                np.sqrt(_pk_halo) * window_lambda_obs_mass_integrated[:, :, np.newaxis],
-                window_z_obs,
+                np.sqrt(_pk_halo) * window_lambda_obs_mass_integrated[:, :, :,np.newaxis]
             )
         )
 
-        # Compute Pk convoluted in lambda_obs: (z_obs, lambda_obs, lambda_obs, k)
+        # Compute Pk convoluted in lambda_obs
+        # Dimension: (z_obs_bin, lambda_obs_bin, lambda_obs_bin, k)
         pk_mean_values = (
             _sqrt_pk_z_integrated[:, :, np.newaxis, :]
             * _sqrt_pk_z_integrated[:, np.newaxis, :, :]
@@ -169,7 +180,8 @@ class ClusterClustering:
             * cluster_counts[:, :, np.newaxis, np.newaxis]
         )
 
-        # compute 2point correlation function : (z_obs, lambda_obs, lambda_obs, radius)
+        # compute 2point correlation function
+        # Dimension: (z_obs_bin, lambda_obs_bin, lambda_obs_bin, radius)
         _2pt_3d_cf = self.cluster_statitstics_modeling.integrate_probe_function_in_dk(
             radial_shell_window[:, np.newaxis, np.newaxis, :, :]
             * pk_mean_values[:, :, :, np.newaxis, :]
@@ -182,6 +194,12 @@ class ClusterClustering:
 
         if not return_intermediate_products:
             return cluster_clustering
+
+        # Compute integral of P(z_obs|lambda_obs, z_true) in z_obs bins
+        # Dimension: (z_obs_bin,lambda_obs_bin,z_true)
+        window_z_obs = self.cluster_statitstics_modeling.window_z_observed(
+            self.selection_function, z_obs_edges, lambda_obs_edges
+        )
 
         intermediate_integration_products = {
             "pk_mean_values": pk_mean_values,
@@ -236,11 +254,10 @@ class ClusterClustering:
         ########################################
         # Cluster statistics modeling quantities
         ########################################
-
         # Compute observed volume in each redshift bin : (z_obs, lambda_obs)
         volume_mean_values = (
             self.cluster_statitstics_modeling.integrate_probe_function_in_redshift(
-                np.ones((1, 1)), window_z_obs
+                window_z_obs
             )
         )
         # Compute output shot-noise terms : (z_obs, lambda_obs, lambda_obs)

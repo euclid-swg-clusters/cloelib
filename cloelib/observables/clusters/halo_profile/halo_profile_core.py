@@ -17,11 +17,11 @@ class HaloProfileCore:
         matter_statistics: MatterStatistics,
         overdensity_type: str = "vir",
         overdensity: int = 200,
-        z=np.linspace(1.0e-5, 6.0 - 1.0e-5, 500),
+        z=np.linspace(1.0e-5, 6.0 - 1.0e-5, 500), # do we need this?
         zs_max: float = 4.0,
-        mean_nz: float = 0.4,
-        sigma_nz: float = 0.3,
-        alpha_nz: float = 0.4,
+        mean_nz: float = 0.4, # this is more likely an array with lenght z_obs_bin
+        sigma_nz: float = 0.3, # this is more likely an array with lenght z_obs_bin
+        alpha_nz: float = 0.4, # this is more likely an array with lenght z_obs_bin
     ):
         r"""Auxiliary class computing quantities used in mass profile models.
 
@@ -44,8 +44,12 @@ class HaloProfileCore:
         self.alpha_nz = alpha_nz
 
         # ??? evaluated at true redshift
-        self.nzsnorM = np.vectorize(self.n_zs_norM)(self.z)
-        self.nzs = self.n_zs(self.z)
+        # I'm not sure what it is computed here exactly
+        # If we want to precompute these quantities
+        # these have to be computed for each z_obs_bin 
+        # while the z_source support depends on zs_max
+        # self.nzsnorM = np.vectorize(self.n_zs_norM)(self.z)
+        # self.nzs = self.n_zs(self.z)
 
     @property
     def background(self):
@@ -95,7 +99,7 @@ class HaloProfileCore:
 
         return 1e-12 * sig_crit / self.background.h  # Msun pc^{-2} h
 
-    def n_zs_norM(self, z):
+    def n_zs_norM(self, z, zobsbin):
         r"""
         Galaxy number density normalization.
 
@@ -105,70 +109,82 @@ class HaloProfileCore:
         ----------
         z: float or np.ndarray
             Lens redshift.
+        zobsbin: int
+            Index of the observed redshift redshift bin.
 
         Returns
         -------
         n_zs_norM: float or np.ndarray
-            Galaxy number density normalization per redshift
+            Galaxy number density normalization per lens redshift and z_obs bin.
         """
         n_zs_norM = 1.0 / (
             skewnorm.cdf(
                 self.zs_max,
-                self.alpha_nz,
+                self.alpha_nz, # to be changed with self.alpha_nz[zobsbin], etc
                 self.mean_nz,
                 self.sigma_nz,
             )
             - skewnorm.cdf(
                 z,
-                self.alpha_nz,
+                self.alpha_nz, # to be changed with self.alpha_nz[zobsbin], etc
                 self.mean_nz,
                 self.sigma_nz,
             )
         )
 
         return n_zs_norM
-
-    def n_zs(self, z):
+    # n_s(z_gal_true) should depend on the source redshift, z_gal_true,
+    # as well on the z_obs_bin (at least for tomobin selection).
+    # The current implementation is not clear: z and self.z seem to be the same array
+    def n_zs(self, z, zobsbin):
         r"""
         Galaxy number density.
 
-        Computes the galaxy number density given a lens redshift.
+        Computes the galaxy number density given a lens redshift and z_obs bin.
 
         Parameters
         ----------
         z: float or np.ndarray
             Lens redshift.
+        zobsbin: int
+            Index of the observed redshift redshift bin.
 
         Returns
         -------
         n_zs: float or np.ndarray
-            Galaxy number density per redshift
+            Galaxy number density per source redshift for a given z_obs bin
         """
-        n_zs = np.zeros((z.size, len(self.z)))
-        for z_ind, _z in enumerate(z):
-            z_s = np.linspace(_z + 1.0e-10, self.zs_max, len(self.z))
-            n_zs[z_ind] = skewnorm.pdf(
-                z_s,
-                self.alpha_nz,
+        # n_zs = np.zeros((z.size, len(self.z)))
+        # for z_ind, _z in enumerate(z):
+        #     z_s = np.linspace(_z + 1.0e-10, self.zs_max, len(self.z))
+        #     n_zs[z_ind] = skewnorm.pdf(
+        #         z_s,
+        #         self.alpha_nz,
+        #         self.mean_nz,
+        #         self.sigma_nz,
+        #     )
+
+        # return n_zs
+        return skewnorm.pdf(
+                z,
+                self.alpha_nz, # to be changed with self.alpha_nz[zobsbin], etc
                 self.mean_nz,
                 self.sigma_nz,
             )
 
-        return n_zs
-
-    def sigma_crit_inv_eff(self, z, zbin):
+    def sigma_crit_inv_eff(self, z, zobsbin, Delta_z = 0.05, z_grid_size=50):
         r"""
         Effective inverse critical surface mass density.
 
         Computes the effective critical surface mass density at
-        the given lens redshift.
+        the true cluster redshift.
 
         Parameters
         ----------
         z: float or np.ndarray
-            Lens redshift.
-        zbin: int
-            Index of the lens redshift bin.
+            true cluster redshift.
+        zobsbin: int
+            Index of the observed redshift redshift bin.
 
         Returns
         -------
@@ -176,10 +192,16 @@ class HaloProfileCore:
             Effective inverse critical surface mass density (units : pc^2 / Msun / h)
         """
         # z_s is temporarily hard-coded
-        z_s = np.linspace(z + 1.0e-10, self.zs_max, len(self.z), axis=1)
-        sig_crit_m1 = self.nzs[zbin] * 1.0 / self.sigma_crit(z, z_s)
+        # z_s = np.linspace(z + 1.0e-10, self.zs_max, len(self.z), axis=1)
+        # sig_crit_m1 = self.nzs[zbin] * 1.0 / self.sigma_crit(z, z_s)
 
-        return self.nzsnorM[zbin] * simpson(sig_crit_m1, x=z_s)  # pc^2 / Msun / h
+        # return self.nzsnorM[zbin] * simpson(sig_crit_m1, x=z_s)  # pc^2 / Msun / h
+
+        z_s = np.linspace(z + Delta_z, self.zs_max, z_grid_size, axis=1) 
+        z_s[z_s>=self.zs_max]=self.zs_max-1.0e-5 # the last term is to avoid problem with the normalization n_zs_norM. It can be removed setting zs_max higer than max z (i.e. z_true)
+        sig_crit_m1 = self.n_zs(z_s,zobsbin) * 1.0 / self.sigma_crit(z, z_s)
+        return self.n_zs_norM(z,zobsbin) * simpson(sig_crit_m1, x=z_s)  # pc^2 / Msun / h
+
 
     def surface_mass_density_args(self, R, z, M, radius_units="Mpc/h"):
         r"""

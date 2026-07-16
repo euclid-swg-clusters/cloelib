@@ -11,12 +11,14 @@ from cloelib.observables.clusters.halo_abundance import CastroHaloAbundance
 from cloelib.observables.clusters.halo_clustering import TwoPoint3DHaloClustering
 from cloelib.observables.clusters.halo_mass_observable import (
     LognormalPowerLawHaloMassObservable,
+    ShiftedPoissonHaloMassObservable,
 )
 from cloelib.observables.clusters.halo_profile import NFWHaloProfile
 from cloelib.observables.clusters.matter_statistics import MatterStatistics
 from cloelib.observables.clusters.selection_function import (
     GaussianSelectionFunction,
     NumericalSelectionFunction,
+    AnalyticSelectionFunction,
 )
 from cloelib.summary_statistics.clusters import (
     ClusterClustering,
@@ -39,6 +41,57 @@ def get_sf_gaussian(**sel_pars):
     )
     sf_clustering = GaussianSelectionFunction(
         **sel_pars,
+        lambda_tab_integ=[31, 51],
+        z_tab_integ=31,
+    )
+    return sf_counts, sf_profiles, sf_clustering
+
+def get_sf_analytic(**sel_pars):
+    _lambda_true_dist_pars = dict(
+        Mmin=10.**11.073,
+        M1=10.**12.191,
+        alpha=0.879,
+        epsilon=0.955,
+        sigma_lnltr=0.208,
+    )
+    _sel_pars_analytic = dict(
+        # scatter in lambda_obs
+        sig_lambda_norm=0.21,
+        sig_lambda_z=0.0,
+        sig_lambda_exponent=0.54,
+        # mean of lambda_obs
+        mu_lambda_norm=0.65,
+        mu_lambda_z=0.056,
+        mu_lambda_0=17.6,
+        # exponential tail slope
+        tau_lambda_norm=0.23,
+        tau_lambda_z=0.0,
+        tau_lambda_exponent=0.22,
+        # projected cluster fraction
+        fprj_lambda_norm=0.04,
+        fprj_lambda_z=-0.03,
+        fprj_lambda_exponent=0.02,
+        # scatter in z_obs
+        sig_z_exponent=-0.26,
+        sig_z_lambda_norm=0.0186,
+        sig_z_z_norm=0.006,
+    )
+
+    sf_counts = AnalyticSelectionFunction(
+        **_sel_pars_analytic,
+        halo_mass_observable=ShiftedPoissonHaloMassObservable(**_lambda_true_dist_pars),
+        lambda_tab_integ=[31, 31, 31, 51],
+        z_tab_integ=31,
+    )
+    sf_profiles = AnalyticSelectionFunction(
+        halo_mass_observable=ShiftedPoissonHaloMassObservable(**_lambda_true_dist_pars),
+        **_sel_pars_analytic,
+        lambda_tab_integ=[31, 31, 31, 51],
+        z_tab_integ=31,
+    )
+    sf_clustering = AnalyticSelectionFunction(
+        halo_mass_observable=ShiftedPoissonHaloMassObservable(**_lambda_true_dist_pars),
+        **_sel_pars_analytic,
         lambda_tab_integ=[31, 51],
         z_tab_integ=31,
     )
@@ -292,8 +345,7 @@ def get_values(get_sf):
     cov_cluster_counts = cluster_counts_statistics.get_NC_covariance(
         z_obs_nc_edges,
         cluster_counts,
-        counts_intermediate_integration_products["window_lambda_obs"],
-        counts_intermediate_integration_products["window_z_obs"],
+        counts_intermediate_integration_products["window_z_lambda_obs"],
     )
     print(f"nc_cov    :  {time.time()-t0:.4f} seconds")
     t0 = time.time()
@@ -431,5 +483,8 @@ if __name__ == "__main__":
     print("Gaussian")
     get_values(get_sf_gaussian)
 
-    print("\nInterp")
-    get_values(get_sf_interp)
+    # print("\nInterp")
+    # get_values(get_sf_interp)
+
+    print("Analytic")
+    get_values(get_sf_analytic)

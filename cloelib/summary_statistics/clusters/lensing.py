@@ -96,27 +96,19 @@ class ClusterWeakLensing:
             Weak lensing quantity (excess surface density or reduced shear) in redshift,
             richness, and radial bins.
         """
-        z_obs_edges_size = len(z_obs_edges) - 1
-
         ############################################
         # Get cluster statistics modeling quantities
         ############################################
-
-        # integral of P(z_obs|lambda_obs, z) on z_obs bins : (z_obs, lambda_obs, ztrue)
-        window_z_obs = self.cluster_statitstics_modeling.window_z_observed(
+        # P(lambda_obs_bin,z_obs_bin|M, z): (z_obs_bin,lambda_obs_bin, ztrue, mass)
+        window_redshift_lambda_obs = self.cluster_statitstics_modeling.window_redshift_richness_observed(
             self.selection_function, z_obs_edges, lambda_obs_edges
-        )
-        # integral of P(lambda_obs|M, z) on lambda_obs bins : (lambda_obs, M, ztrue)
-        window_lambda_obs = self.cluster_statitstics_modeling.window_richness_observed(
-            self.selection_function, lambda_obs_edges
         )
         # cluster counts : (z_obs, lambda_obs)
         cluster_counts = self.cluster_statitstics_modeling.integrate_probe_function_in_redshift(
-            # integral of P(lambda_obs|M, z)*dn/dM on lambda_obs bins and mass : (lambda_obs, ztrue)
+            # integral of P(lambda_obs_bin,z_obs_bin|M, z)*dn/dM on lambda_obs bins and mass : (lambda_obs, ztrue)
             self.cluster_statitstics_modeling.integrate_probe_function_in_mass(
-                np.ones((1, 1)), window_lambda_obs
+                np.ones((1, 1)), window_redshift_lambda_obs
             ),
-            window_z_obs,
         )
 
         ########################
@@ -132,27 +124,26 @@ class ClusterWeakLensing:
             self.cluster_statitstics_modeling.tabulated_integrands["M"],
             self.halo_concentration,
         )
-        # excess surface mass density in a richness bin, integrated on mass w HMF : (lambda_obs, ztrue, radius)
+        # excess surface mass density in a richness bin, integrated on mass w HMF
+        # Dimension: (z_obs_bin, lambda_obs_bin, ztrue, radius)
         excess_surface_density_in_window_lambda_obs_mass_integrated = (
             self.cluster_statitstics_modeling.integrate_probe_function_in_mass(
-                excess_surface_mass_density, window_lambda_obs
+                excess_surface_mass_density, window_redshift_lambda_obs[:,:,:,:,np.newaxis]
             )
         )
 
         # redshift part
 
         # Apply effective inverse critical surface mass density if provided
-        window_z_obs_use = window_z_obs
         if effective_inverse_critical_surface_mass_density is not None:
-            window_z_obs_use *= effective_inverse_critical_surface_mass_density[
-                :, np.newaxis, :
+            excess_surface_density_in_window_lambda_obs_mass_integrated *=effective_inverse_critical_surface_mass_density[
+                :, np.newaxis, :, np.newaxis
             ]
 
         # output : (z_obs, lambda_obs, radius)
         wl_profile_mean_values = (
             self.cluster_statitstics_modeling.integrate_probe_function_in_redshift(
                 excess_surface_density_in_window_lambda_obs_mass_integrated,
-                window_z_obs_use,
             )
         ) / cluster_counts[:, :, np.newaxis]
         return wl_profile_mean_values
