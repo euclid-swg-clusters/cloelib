@@ -48,9 +48,6 @@ def test_array_shapes():
     _prof_kwargs = dict(
         two_halo="None",
         zs_max=2.0,
-        mean_nz=0.4,
-        sigma_nz=0.3,
-        alpha_nz=0.4,
     )
 
     profile_nfw = NFWHaloProfile(_get_matter_statistics(), **_prof_kwargs)
@@ -217,9 +214,6 @@ def test_profiles():
         two_halo="None",
         trunc_fact=3.0,
         zs_max=2.0,
-        mean_nz=0.4,
-        sigma_nz=0.3,
-        alpha_nz=0.4,
     )
     profile_bmo = BMOHaloProfile(_get_matter_statistics(), **_prof_kwargs)
     _test_profile(profile_bmo, _reference_vals)
@@ -335,9 +329,6 @@ def test_misc_profile():
     _prof_kwargs = dict(
         trunc_fact=3.0,
         zs_max=2.0,
-        mean_nz=0.4,
-        sigma_nz=0.3,
-        alpha_nz=0.4,
     )
     profile_misc = MiscBMOHaloProfileEmu(_get_matter_statistics(), **_prof_kwargs)
     _test_misc_profile(profile_misc, _reference_vals)
