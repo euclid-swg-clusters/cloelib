@@ -66,13 +66,13 @@ def get_sf_analytic(**sel_pars):
         # exponential tail slope
         tau_lambda_norm=0.23,
         tau_lambda_z=0.0,
-        tau_lambda_exponent=0.22,
+        tau_lambda_exponent= - 0.22,
         # projected cluster fraction
         fprj_lambda_norm=0.04,
         fprj_lambda_z=-0.03,
         fprj_lambda_exponent=0.02,
         # scatter in z_obs
-        sig_z_exponent=-0.26,
+        sig_z_lambda_exponent=-0.26,
         sig_z_lambda_norm=0.0186,
         sig_z_z_norm=0.006,
     )

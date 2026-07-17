@@ -60,13 +60,13 @@ def _get_test_analytic_sf():
         # exponential tail slope
         tau_lambda_norm=0.23,
         tau_lambda_z=0.0,
-        tau_lambda_exponent=0.22,
+        tau_lambda_exponent= - 0.22,
         # projected cluster fraction
         fprj_lambda_norm=0.04,
         fprj_lambda_z=-0.03,
         fprj_lambda_exponent=0.02,
         # scatter in z_obs
-        sig_z_exponent=-0.26,
+        sig_z_lambda_exponent=-0.26,
         sig_z_lambda_norm=0.0186,
         sig_z_z_norm=0.006,
         # quadrature
@@ -485,7 +485,7 @@ def test_analytical_selectionfunction_compare_with_tabulated_values():
     mass             = np.array([5.0e13, 1.0e14, 5.0e14])
 
     # --- test window_redshift_richness_observed_given_lambda_true ---
-    wf_ltr = sf.window_z_lambda_observed(
+    wf_ltr = sf.window_redshift_lambda_observed(
         z_obs_edges=z_obs_edges,
         lambda_obs_edges=lambda_obs_edges,
         z_true=z_true,
@@ -508,7 +508,7 @@ def test_analytical_selectionfunction_compare_with_tabulated_values():
     assert_allclose(wf_ltr[0, 0, ::3, ::10], wf_ltr_ref, atol=1e-6)
 
     # sanity check: values should be in [0,1]
-    assert np.all(wf_ltr >= 0.), "window_z_lambda_observed has negative values"
+    assert np.all(wf_ltr >= 0.), "window_redshift_lambda_observed has negative values"
 
     # --- test window_redshift_richness_observed ---
     wf = sf.window_redshift_richness_observed(
