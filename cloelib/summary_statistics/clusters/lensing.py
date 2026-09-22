@@ -173,7 +173,7 @@ class ClusterWeakLensing:
             effective_inverse_critical_surface_mass_density=None,
         )
 
-def get_gt(
+    def get_gt(
         self, z_obs_edges, lambda_obs_edges, radius_edges, opt_sel_bias_params=None
     ):
         """Compute reduced shear profile.
@@ -201,6 +201,9 @@ def get_gt(
         """
         z_obs_edges_size = len(z_obs_edges) - 1
 
+        # mean z_obs per bin, used to select the tomographic bin index
+        z_obs_mean = 0.5 * (z_obs_edges[:-1] + z_obs_edges[1:])
+
         # Effective inverse critical surface mass density : (z_obs, ztrue)
         effective_inverse_critical_surface_mass_density = np.zeros(
             (
@@ -209,10 +212,11 @@ def get_gt(
             )
         )
         for ind_z in range(z_obs_edges_size):
+            idx = self.profile.core._get_tomo_bin_index(z_obs_mean[ind_z])
             effective_inverse_critical_surface_mass_density[ind_z] = (
                 self.profile.core.sigma_crit_inv_eff(
                     self.cluster_statitstics_modeling.tabulated_integrands["ztrue"],
-                    ind_z,
+                    idx,
                 )
             )
 
