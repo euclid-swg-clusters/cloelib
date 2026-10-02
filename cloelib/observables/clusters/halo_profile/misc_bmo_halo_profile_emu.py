@@ -167,21 +167,17 @@ class MiscBMOHaloProfileEmu:
         Overdensity type passed to :class:`HaloProfileCore`.  Default ``"vir"``.
     overdensity : int, optional
         Overdensity value passed to :class:`HaloProfileCore`.  Default ``200``.
+    two_halo : str, optional
+        If ``"sum"``, the 1-halo and miscentered 2-halo profile are summed.
+        If ``"max"``, the maximum between them is considered at each point.
+        If ``"None"``, the 2-halo is not included. Default is ``"None"``.
     trunc_fact : float, optional
         Truncation radius in units of the overdensity radius
         (:math:`R_t = \tau_\mathrm{vir} \cdot R_\Delta`).  Default ``3.0``.
     hidden_size : int, optional
         Hidden-layer width of the emulator networks. Default ``512``.
-    z : array_like, optional
-        Redshift grid for cosmological calculations.
     zs_max : float, optional
         Maximum source redshift for lensing calculations.
-    mean_nz : float, optional
-        Mean of the source redshift distribution.
-    sigma_nz : float, optional
-        Width of the source redshift distribution.
-    alpha_nz : float, optional
-        Shape parameter of the source redshift distribution.
 
     Notes
     -----
@@ -202,25 +198,19 @@ class MiscBMOHaloProfileEmu:
         delta_sigma_max_params: np.ndarray = None,
         overdensity_type: str = "vir",
         overdensity: int = 200,
+        two_halo: str = "None",
         trunc_fact: float = 3.0,
         hidden_size: int = 512,
-        z: np.ndarray = np.linspace(1.0e-5, 6.0 - 1.0e-5, 500),
         zs_max: float = 2.0,
-        mean_nz: float = 0.4,
-        sigma_nz: float = 0.3,
-        alpha_nz: float = 0.4,
     ):
         self.core = HaloProfileCore(
             matter_statistics,
             overdensity_type=overdensity_type,
             overdensity=overdensity,
-            z=z,
             zs_max=zs_max,
-            mean_nz=mean_nz,
-            sigma_nz=sigma_nz,
-            alpha_nz=alpha_nz,
         )
 
+        self.two_halo = two_halo
         self.trunc_fact = trunc_fact
 
         # Normalisation bounds — fall back to EmuNetWeights defaults
@@ -436,6 +426,7 @@ class MiscBMOHaloProfileEmu:
         M: np.ndarray,
         c: float,
         sigma_off: float,
+        halo_bias: np.ndarray = None,
         radius_units: str = "Mpc/h",
     ) -> np.ndarray:
         r"""
@@ -455,6 +446,9 @@ class MiscBMOHaloProfileEmu:
             Scatter of the Rayleigh miscentering PDF (Mpc/h),
             see Eq. 8 of `Johnston et al. 2007
             <https://arxiv.org/pdf/0709.1159.pdf>`_.
+            It is also used for the miscentered 2-halo term.
+        halo_bias : np.ndarray, optional
+            Halo bias used for the 2h term, with shape ``(Nz, NM)``.
         radius_units : str, optional
             Unit for the input radii.  Accepted values are
             ``"Mpc/h"``, ``"radians"``, ``"degrees"``, ``"arcmin"``,
@@ -483,6 +477,17 @@ class MiscBMOHaloProfileEmu:
             rho_s,
         )
 
+        if self.two_halo != "None":
+            Sigma_off = self.core.include_surface_mass_density_2h(
+                Sigma_off,
+                self.two_halo,
+                R,
+                z,
+                halo_bias,
+                radius_units,
+                sigma_off=sigma_off,
+            )
+
         self.core.check_profile_shape(R, z, M, Sigma_off)
 
         return Sigma_off
@@ -496,6 +501,7 @@ class MiscBMOHaloProfileEmu:
         M: np.ndarray,
         c: float,
         sigma_off: float,
+        halo_bias: np.ndarray = None,
         radius_units: str = "Mpc/h",
     ) -> np.ndarray:
         r"""
@@ -516,6 +522,9 @@ class MiscBMOHaloProfileEmu:
             Scatter of the Rayleigh miscentering PDF (Mpc/h),
             see Eq. 8 of `Johnston et al. 2007
             <https://arxiv.org/pdf/0709.1159.pdf>`_.
+            It is also used for the miscentered 2-halo term.
+        halo_bias : np.ndarray, optional
+            Halo bias used for the 2h term, with shape ``(Nz, NM)``.
         radius_units : str, optional
             Unit for the input radii.  Accepted values are
             ``"Mpc/h"``, ``"radians"``, ``"degrees"``, ``"arcmin"``,
@@ -543,6 +552,17 @@ class MiscBMOHaloProfileEmu:
             sigma_off,
             rho_s,
         )
+
+        if self.two_halo != "None":
+            DeltaSigma_off = self.core.include_excess_surface_mass_density_2h(
+                DeltaSigma_off,
+                self.two_halo,
+                R,
+                z,
+                halo_bias,
+                radius_units,
+                sigma_off=sigma_off,
+            )
 
         self.core.check_profile_shape(R, z, M, DeltaSigma_off)
 
