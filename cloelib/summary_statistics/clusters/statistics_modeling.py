@@ -68,6 +68,9 @@ class ClusterStatisticsModeling:
         # observable objects
         self.halo_abundance = halo_abundance
 
+        # effective survey area in deg2
+        self.area = area
+
         # check if the integration points lie within the interpolation ranges
         if self.matter_statistics.interpolate_pk:
             z_knots, k_knots = self.matter_statistics.Pk_interp_cb.get_knots()

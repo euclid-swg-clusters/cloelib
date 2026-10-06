@@ -1,4 +1,4 @@
 from .clustering import ClusterClustering
 from .counts import ClusterCounts
-from .lensing import ClusterWeakLensing
+from .lensing import ClusterWeakLensing, ClusterWeakLensingCovariance
 from .statistics_modeling import ClusterStatisticsModeling
