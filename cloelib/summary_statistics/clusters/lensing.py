@@ -389,9 +389,12 @@ class ClusterWeakLensingCovariance:
             selection function), profile core (overdensity, source redshift
             distribution) and halo concentration are used for the covariance.
         n_eff : float or numpy.ndarray
-            Effective source number density (gal/arcmin^2) of the full source
-            redshift distribution. Either a float or an array with one value
-            per tomographic source bin of the profile core.
+            Effective source number density (gal/arcmin^2) of the source sample,
+            i.e. before the cut z_s > z_obs + source_delta_z, which is applied
+            internally with the skew-normal n(z). Either a float, used for all
+            the observed redshift bins, or an array with one value per
+            tomographic bin t of the profile core. A single value is a good approximation
+            only for the lowest observed redshift bins.
         sigma_e : float
             Shape noise per shear component.
         nonlinear_perturbations : Perturbations, None
