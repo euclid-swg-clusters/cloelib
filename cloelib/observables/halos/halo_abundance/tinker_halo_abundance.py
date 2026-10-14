@@ -32,7 +32,10 @@ class TinkerHaloAbundance(HaloAbundanceBase):
         Computation of the multiplicity function.
 
         Computes the Tinker et al. (2008) multiplicity function
-        at the requested redshift and mass points.
+        at the requested redshift and mass points. The parameters are
+        interpolated in the overdensity with respect to the mean density,
+        calibrated for 200 <= Delta_m <= 3200 and z <~ 2.5. A ValueError is
+        raised for Delta_m outside this range.
 
         Parameters
         ----------
@@ -46,7 +49,52 @@ class TinkerHaloAbundance(HaloAbundanceBase):
         f_sigma_nu: numpy.ndarray
             f_sigma_nu[i,j], where i is the redshift axis and j the mass axis
         """
-        raise NotImplementedError
+        # compute inputs
+        sigma = self.sigma_z_M(z, M)
+        Delta = convert_to_Delta_crit(
+            self.overdensity_type,
+            self.overdensity,
+            self.halo_model_properties.background,
+            z,
+        ) / self.halo_model_properties.background.Omega_cb(z)
+        Delta = np.atleast_1d(Delta)
+
+        ##################
+        # HMF computations
+        ##################
+
+        # parameters (Table 2 of Tinker et al. 2008), as a function of the
+        # overdensity with respect to the mean density
+        Delta_tab = np.array([200, 300, 400, 600, 800, 1200, 1600, 2400, 3200])
+        A0_tab = np.array(
+            [0.186, 0.200, 0.212, 0.218, 0.248, 0.255, 0.260, 0.260, 0.260]
+        )
+        a0_tab = np.array([1.47, 1.52, 1.56, 1.61, 1.87, 2.13, 2.30, 2.53, 2.66])
+        b0_tab = np.array([2.57, 2.25, 2.05, 1.87, 1.59, 1.51, 1.46, 1.44, 1.41])
+        c0_tab = np.array([1.19, 1.27, 1.34, 1.45, 1.58, 1.80, 1.97, 2.24, 2.44])
+
+        if np.any(Delta < Delta_tab[0]) or np.any(Delta > Delta_tab[-1]):
+            raise ValueError(
+                "Tinker et al. (2008) is calibrated for 200 <= Delta_m <= 3200; "
+                f"got Delta_m in [{Delta.min():.1f}, {Delta.max():.1f}]."
+            )
+
+        # Compute main quantities
+        A0 = np.interp(Delta, Delta_tab, A0_tab)
+        a0 = np.interp(Delta, Delta_tab, a0_tab)
+        b0 = np.interp(Delta, Delta_tab, b0_tab)
+        c = np.interp(Delta, Delta_tab, c0_tab)
+        alpha = 10.0 ** (-((0.75 / np.log10(Delta / 75.0)) ** 1.2))
+
+        A = A0 * (1.0 + np.asarray(z)) ** -0.14
+        a = a0 * (1.0 + np.asarray(z)) ** -0.06
+        b = b0 * (1.0 + np.asarray(z)) ** -alpha
+
+        return (
+            A[:, np.newaxis]
+            * ((sigma / b[:, np.newaxis]) ** -a[:, np.newaxis] + 1.0)
+            * np.exp(-c[:, np.newaxis] / sigma**2.0)
+        )
 
     def bias(self, z, M):
         r"""
