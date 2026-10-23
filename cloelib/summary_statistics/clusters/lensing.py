@@ -121,9 +121,9 @@ class ClusterWeakLensing:
 
         # mass/richness part
 
-        # excess surface mass density : (ztrue, M, radius)
+        # excess surface mass density at the center of the radial bins : (ztrue, M, radius)
         excess_surface_mass_density = self.profile.excess_surface_mass_density(
-            radius_edges[:-1],
+            0.5 * (radius_edges[:-1] + radius_edges[1:]),
             self.cluster_statitstics_modeling.tabulated_integrands["ztrue"],
             self.cluster_statitstics_modeling.tabulated_integrands["M"],
             self.halo_concentration,
@@ -193,10 +193,11 @@ class ClusterWeakLensing:
         opt_sel_bias_params: tuple, None
             If not None, applies the optical selection bias correction to the
             profile multiplying it by
-            ``self.optical_selection_bias_correction(radius_edges, *opt_sel_bias_params)``.
-            The values must be `opt_sel_bias_params=(R0, A, alpha, beta, gamma)``,
+            ``self.optical_selection_bias_correction(radius_mean, *opt_sel_bias_params)``,
+            with ``radius_mean`` the centers of the radial bins.
+            The values must be ``opt_sel_bias_params=(R0, A, alpha, beta, gamma)``,
             where each individual parameter must be either float or have shape
-            (redshift, richness, radius) bins.
+            (redshift, richness) bins.
 
         Returns
         -------
@@ -227,8 +228,10 @@ class ClusterWeakLensing:
         # output : (z_obs, lambda_obs, radius)
         opt_sel_corr = 1
         if opt_sel_bias_params is not None:
+            # correction at the center of the radial bins : (z_obs, lambda_obs, radius)
             opt_sel_corr = self.optical_selection_bias_correction(
-                radius_edges, *opt_sel_bias_params
+                0.5 * (radius_edges[:-1] + radius_edges[1:]),
+                *(np.asarray(par)[..., np.newaxis] for par in opt_sel_bias_params),
             )
         return (
             self._get_profile(
@@ -271,10 +274,8 @@ class ClusterWeakLensing:
         # Note:
         # Reasonable values for the parameters are: R0=1.20cMpc/h, A=0.20, alpha=4.0,
         # beta=−0.3 , gamma=1.6
-        return (
-            A * (R / R0) ** alpha * (1 + (R / R0**gamma)) ** ((alpha - beta) / gamma)
-            + 1
-        )
+        x = R / R0
+        return A * x**alpha * (1 + x**gamma) ** ((beta - alpha) / gamma) + 1
 
 
 class ClusterWeakLensingCovariance:
