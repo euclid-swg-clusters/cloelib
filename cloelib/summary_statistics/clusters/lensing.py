@@ -137,11 +137,15 @@ class ClusterWeakLensing:
         # mass/richness part
 
         # excess surface mass density at the center of the radial bins : (ztrue, M, radius)
+        # the halo bias is used only if the profile includes the 2-halo term
         excess_surface_mass_density = self.profile.excess_surface_mass_density(
             0.5 * (radius_edges[:-1] + radius_edges[1:]),
             self.cluster_statitstics_modeling.tabulated_integrands["ztrue"],
             self.cluster_statitstics_modeling.tabulated_integrands["M"],
             self.halo_concentration,
+            halo_bias=self.cluster_statitstics_modeling.tabulated_integrands[
+                "bias(ztrue,M)"
+            ],
         )
         # excess surface mass density in a richness bin, integrated on mass w HMF
         # Dimension: (z_obs_bin, lambda_obs_bin, ztrue, radius)
