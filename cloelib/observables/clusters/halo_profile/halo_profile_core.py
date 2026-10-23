@@ -256,11 +256,12 @@ class HaloProfileCore:
             self.zs_max - 1.0e-5
         )  # the last term is to avoid problem with the normalization n_zs_norM. It can be removed setting zs_max higer than max z (i.e. z_true)
         sig_crit_m1 = self.n_zs(z_s, idx) * 1.0 / self.sigma_crit(z, z_s)
-        return self.n_zs_norM(
-            z,
-            idx,
-            Delta_z,
-        ) * simpson(sig_crit_m1, x=z_s)  # pc^2 / Msun / h
+        with np.errstate(divide="ignore", invalid="ignore"):
+            sig_crit_inv_eff = self.n_zs_norM(z, idx, Delta_z) * simpson(
+                sig_crit_m1, x=z_s
+            )  # pc^2 / Msun / h
+        # no sources behind clusters with z + Delta_z >= zs_max
+        return np.where(np.asarray(z) + Delta_z < self.zs_max, sig_crit_inv_eff, 0.0)
 
     def surface_mass_density_args(self, R, z, M, radius_units="Mpc/h"):
         r"""

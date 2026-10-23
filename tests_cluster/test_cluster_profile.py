@@ -116,6 +116,13 @@ def _test_profile(profile, reference_vals):
     print("    n_zs")
     nzs = np.array([profile.core.n_zs(z_sources_test,idx[i]) for i in range(mean_z_cl_test.size)])
     assert_allclose(nzs, **reference_vals["n_zs"],atol=1.0e-5)
+    print("    sigma_crit_inv_eff without sources behind the cluster")
+    # no sources for z + Delta_z >= zs_max (Delta_z = 0.05): zero, not NaN
+    z_lens_edge = np.array([0.5, profile.core.zs_max - 0.05, profile.core.zs_max - 0.03])
+    sigma_crit_inv_eff = profile.core.sigma_crit_inv_eff(z_lens_edge, 0)
+    assert np.all(np.isfinite(sigma_crit_inv_eff))
+    assert sigma_crit_inv_eff[0] > 0.0
+    assert_equal(sigma_crit_inv_eff[1:], 0.0)
     print("    surface_mass_density")
     assert_allclose(
         profile.surface_mass_density(R_test, z_test, M_test, c_test)[:, 0, 0],
