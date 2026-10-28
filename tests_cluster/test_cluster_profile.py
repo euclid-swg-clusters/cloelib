@@ -3,6 +3,7 @@
 import numpy as np
 import pytest
 from numpy.testing import assert_allclose, assert_equal, assert_raises
+from scipy.stats import rayleigh
 
 from cloelib.cosmology.camb_cosmology import CAMBBackground, CAMBLinearPerturbations
 from cloelib.observables.clusters.halo_abundance import CastroHaloAbundance
@@ -254,6 +255,9 @@ def test_misc_bmo_profile():
     # Reference values from the notebook
     # "Check Miscentering model for Sigma and DeltaSigma.ipynb".
     # Shape (z_test.size, R_test.size), units h * Msun / pc**2.
+    # The 2-halo values refer to the semi-approximated functions
+    # (*_2h_off_semiapprox); the 2-halo term included in the profile uses the exact
+    # average over the offsets (*_2h_off), tested in test_miscentered_2h_convolution.
     # The 2-halo terms are unbiased (divided by the halo bias). Their tolerance
     # accounts for the accuracy of the k integration (quad_vec, epsrel=1e-1).
     _reference_vals = {
@@ -301,10 +305,14 @@ def test_misc_bmo_profile():
     DeltaSigma_1h = profile.excess_surface_mass_density(
         R_test, z_test, M_test, c_test, sigma_off_test
     )
-    Sigma_2h = profile.core.surface_mass_density_2h_off_semiapprox(
+    Sigma_2h_semi = profile.core.surface_mass_density_2h_off_semiapprox(
         R_test, z_test, sigma_off_test
     )
-    DeltaSigma_2h = profile.core.excess_surface_mass_density_2h_off_semiapprox(
+    DeltaSigma_2h_semi = profile.core.excess_surface_mass_density_2h_off_semiapprox(
+        R_test, z_test, sigma_off_test
+    )
+    Sigma_2h = profile.core.surface_mass_density_2h_off(R_test, z_test, sigma_off_test)
+    DeltaSigma_2h = profile.core.excess_surface_mass_density_2h_off(
         R_test, z_test, sigma_off_test
     )
 
@@ -347,8 +355,8 @@ def test_misc_bmo_profile():
     _computed_vals = {
         "surface_mass_density_1h": Sigma_1h[:, 0, :],
         "excess_surface_mass_density_1h": DeltaSigma_1h[:, 0, :],
-        "surface_mass_density_2h_off": Sigma_2h,
-        "excess_surface_mass_density_2h_off": DeltaSigma_2h,
+        "surface_mass_density_2h_off": Sigma_2h_semi,
+        "excess_surface_mass_density_2h_off": DeltaSigma_2h_semi,
     }
     missing = [k for k, v in _reference_vals.items() if v["desired"] is None]
     for key, vals in _reference_vals.items():
@@ -496,3 +504,160 @@ def test_gt_covariance():
         variance_reference[..., :, np.newaxis] * variance_reference[..., np.newaxis, :]
     )
     assert_allclose(correlation, correlation_reference, atol=2e-3)
+
+
+def test_miscentered_2h_convolution():
+
+    # Exact average of the 2-halo term over a Rayleigh distribution of the offsets
+    print("# Miscentered 2-halo term (convolution)")
+
+    matter_stat = _get_matter_statistics(k=np.geomspace(1e-4, 100.0, 1000))
+    profile = BMOHaloProfile(matter_stat, two_halo="None", zs_max=2.0)
+    R_test = np.array([0.1, 0.3, 1.0, 3.0, 10.0])  # Mpc/h
+    z_test = np.array([0.3, 0.8])
+    sigma_off = 0.2  # Mpc/h
+
+    print("    Sigma vs brute-force average")
+    Sigma_off = profile.core.surface_mass_density_2h_off(R_test, z_test, sigma_off)
+    ln_roff = np.linspace(
+        np.log(rayleigh.ppf(1.0e-4, scale=sigma_off)),
+        np.log(rayleigh.ppf(1.0 - 1.0e-4, scale=sigma_off)),
+        120,
+    )
+    roff = np.exp(ln_roff)
+    theta = np.linspace(0.0, 2.0 * np.pi, 121)
+    dist = np.sqrt(
+        R_test[None, :, None] ** 2.0
+        + roff[:, None, None] ** 2.0
+        + 2.0 * R_test[None, :, None] * roff[:, None, None] * np.cos(theta)[None, None, :]
+    )
+    Sigma_dist = matter_stat.surface_mass_density_2h(dist.ravel(), z_test).reshape(
+        (z_test.size,) + dist.shape
+    )
+    weights = (rayleigh.pdf(roff, scale=sigma_off) * roff)[None, :, None]
+    Sigma_brute = np.trapezoid(
+        np.trapezoid(Sigma_dist, theta, axis=-1) / (2.0 * np.pi) * weights,
+        ln_roff,
+        axis=1,
+    )
+    assert_allclose(Sigma_off, Sigma_brute, rtol=1e-3)
+
+    print("    DeltaSigma for a small offset vs the centered J2 Hankel transform")
+    DeltaSigma_off = profile.core.excess_surface_mass_density_2h_off(
+        R_test, z_test, 0.005
+    )
+    assert_allclose(
+        DeltaSigma_off,
+        matter_stat.excess_surface_mass_density_2h(R_test, z_test),
+        atol=2e-3 * matter_stat.surface_mass_density_2h(R_test, z_test).max(),
+    )
+
+    print("    angular radius units")
+    D_A = matter_stat.angular_diameter_distance(z_test) * matter_stat.background.h
+    R_arcmin = np.degrees(R_test[1] / D_A[0]) * 60.0 * np.ones(2)
+    assert_allclose(
+        profile.core.surface_mass_density_2h_off(
+            R_arcmin, z_test[:1], sigma_off, radius_units="arcmin"
+        )[0],
+        Sigma_off[0, 1],
+        rtol=1e-6,
+    )
+
+
+def test_lensing_miscentering():
+
+    # Centered + miscentered profiles and optical selection bias correction
+    print("# Lensing profile with miscentering")
+
+    matter_stat = _get_matter_statistics(
+        z=np.linspace(0.01, 2.0, 100), k=np.geomspace(1e-4, 10.0, 500)
+    )
+    cluster_statistics_modeling = ClusterStatisticsModeling(
+        CastroHaloAbundance(matter_statistics=matter_stat),
+        integ_k_arr=np.geomspace(1.1e-4, 9.9, 400),
+        integ_mass_arr=np.logspace(13.5, 15.5, 41),
+        integ_lambda_true_arr=np.geomspace(5.0, 250.0, 51),
+        integ_ztrue_arr=np.linspace(0.2, 0.9, 15),
+        area=10313.0,
+    )
+    selection_function = GaussianSelectionFunction(
+        halo_mass_observable=LognormalPowerLawHaloMassObservable(
+            A_l=52.0, B_l=0.9, C_l=0.5, sig_A_l=0.2, sig_B_l=-0.05, sig_C_l=0.001
+        ),
+        sig_lambda_norm=0.9,
+        sig_lambda_z=0.1,
+        sig_lambda_exponent=0.4,
+        sig_z_z=0.025,
+        sig_z_lambda=5.0e-6,
+        lambda_tab_integ=[31, 31],
+        z_tab_integ=31,
+    )
+    cluster_wl = ClusterWeakLensing(
+        cluster_statistics_modeling,
+        BMOHaloProfile(matter_stat, two_halo="sum", trunc_fact=3.0, zs_max=2.0),
+        halo_concentration=4.0,
+        selection_function=selection_function,
+        miscentered_profile=MiscBMOHaloProfileEmu(
+            matter_stat, two_halo="sum", trunc_fact=3.0, zs_max=2.0
+        ),
+    )
+    z_obs_edges = np.array([0.3, 0.5, 0.7])
+    lambda_obs_edges = np.array([20.0, 30.0, 60.0])
+    radius_edges = np.geomspace(0.3, 10.0, 6)
+    args = (z_obs_edges, lambda_obs_edges, radius_edges)
+    sigma_off = 0.3  # Mpc/h
+
+    DS_cen = cluster_wl.get_DeltaSigma(*args)
+    DS_cen_mix = cluster_wl.get_DeltaSigma(*args, miscentering_params=(1.0, sigma_off))
+    DS_off = cluster_wl.get_DeltaSigma(*args, miscentering_params=(0.0, sigma_off))
+    DS_mix = cluster_wl.get_DeltaSigma(*args, miscentering_params=(0.7, sigma_off))
+
+    print("    centered and miscentered fractions")
+    assert DS_mix.shape == (2, 2, 5)
+    assert_allclose(DS_cen_mix, DS_cen, rtol=1e-12)
+    assert_allclose(DS_mix, 0.7 * DS_cen + 0.3 * DS_off, rtol=1e-10)
+    # the miscentering lowers DeltaSigma at small radii
+    assert np.all(DS_off[..., 0] < DS_cen[..., 0])
+
+    print("    optical selection bias correction")
+    corr_pars = (1.2, 0.2, 4.0, -0.3, 1.6)
+    gt_mix = cluster_wl.get_gt(*args, miscentering_params=(0.7, sigma_off))
+    gt_corr = cluster_wl.get_gt(
+        *args, opt_sel_bias_params=corr_pars, miscentering_params=(0.7, sigma_off)
+    )
+    R_mean = 0.5 * (radius_edges[:-1] + radius_edges[1:])
+    assert_allclose(
+        gt_corr,
+        gt_mix * cluster_wl.optical_selection_bias_correction(R_mean, *corr_pars),
+        rtol=1e-12,
+    )
+    # the default offset is 1
+    assert_allclose(
+        cluster_wl.get_gt(
+            *args,
+            opt_sel_bias_params=corr_pars + (1.0,),
+            miscentering_params=(0.7, sigma_off),
+        ),
+        gt_corr,
+        rtol=1e-12,
+    )
+    assert_allclose(
+        cluster_wl.get_gt(
+            *args,
+            opt_sel_bias_params=corr_pars + (1.1,),
+            miscentering_params=(0.7, sigma_off),
+        ),
+        gt_corr + 0.1 * gt_mix,
+        rtol=1e-10,
+    )
+
+    print("    errors")
+    assert_raises(ValueError, cluster_wl.get_gt, *args, opt_sel_bias_params=corr_pars[:4])
+    assert_raises(ValueError, cluster_wl.get_DeltaSigma, *args, miscentering_params=(1.2, sigma_off))
+    cluster_wl_cen = ClusterWeakLensing(
+        cluster_statistics_modeling,
+        BMOHaloProfile(matter_stat, two_halo="sum", trunc_fact=3.0, zs_max=2.0),
+        halo_concentration=4.0,
+        selection_function=selection_function,
+    )
+    assert_raises(ValueError, cluster_wl_cen.get_DeltaSigma, *args, miscentering_params=(0.7, sigma_off))

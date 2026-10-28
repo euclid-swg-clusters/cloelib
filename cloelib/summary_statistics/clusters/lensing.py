@@ -33,6 +33,7 @@ class ClusterWeakLensing:
         profile: HaloProfile,
         halo_concentration: float,
         selection_function: SelectionFunction,
+        miscentered_profile: HaloProfile = None,
     ):
         """
         Initializes the cluster profile lensing
@@ -48,6 +49,11 @@ class ClusterWeakLensing:
             Halo concentration
         selection_function : SelectionFunction
             Selection function object
+        miscentered_profile : Profile, optional
+            Profile of the miscentered clusters (e.g. ``MiscBMOHaloProfileEmu``), whose
+            ``excess_surface_mass_density`` takes the miscentering scale ``sigma_off``
+            after the concentration. Required to use ``miscentering_params`` in
+            ``get_DeltaSigma`` and ``get_gt``.
         """
         halo_abundance = cluster_statitstics_modeling.halo_abundance
         Delta_abundance = halo_abundance.overdensity_type
@@ -60,6 +66,13 @@ class ClusterWeakLensing:
             raise ValueError(
                 f"The overdensity definition of the mass profile ({Delta_profile}) differs from the one adopted for halo abundance modeling ({Delta_abundance}).)"
             )
+        if (
+            miscentered_profile is not None
+            and miscentered_profile.core.overdensity_type != Delta_profile
+        ):
+            raise ValueError(
+                f"The overdensity definition of the miscentered profile ({miscentered_profile.core.overdensity_type}) differs from the one of the centered profile ({Delta_profile})."
+            )
 
         # cluster counts summary statistics, contains tables for integrals
         # and functions to compute binned integrals of counts
@@ -67,6 +80,7 @@ class ClusterWeakLensing:
 
         # observable objects
         self.profile = profile
+        self.miscentered_profile = miscentered_profile
         self.selection_function = selection_function
 
         # internal values
@@ -78,6 +92,7 @@ class ClusterWeakLensing:
         lambda_obs_edges,
         radius_edges,
         effective_inverse_critical_surface_mass_density=None,
+        miscentering_params=None,
     ):
         """Compute weak lensing profile, it can be excess surface density or reduced shear.
 
@@ -93,6 +108,12 @@ class ClusterWeakLensing:
             The effective inverse of the critical surface density.
             If provided, it must be shape (ztrue, M, radius) and this function
             returns the reduced shear, else it returns the excess surface density.
+        miscentering_params : tuple, None
+            If not None, ``(f_cen, sigma_off)``: a fraction ``f_cen`` of the clusters is
+            correctly centered and the rest is miscentered with a Rayleigh distribution
+            of the offsets of scale ``sigma_off`` (physical Mpc/h), modeled with
+            ``miscentered_profile``. Both terms include the 2-halo term if the profiles
+            do.
 
         Returns
         -------
@@ -123,15 +144,42 @@ class ClusterWeakLensing:
 
         # excess surface mass density at the center of the radial bins : (ztrue, M, radius)
         # the halo bias is used only if the profile includes the 2-halo term
-        excess_surface_mass_density = self.profile.excess_surface_mass_density(
+        profile_args = (
             0.5 * (radius_edges[:-1] + radius_edges[1:]),
             self.cluster_statitstics_modeling.tabulated_integrands["ztrue"],
             self.cluster_statitstics_modeling.tabulated_integrands["M"],
             self.halo_concentration,
-            halo_bias=self.cluster_statitstics_modeling.tabulated_integrands[
-                "bias(ztrue,M)"
-            ],
         )
+        halo_bias = self.cluster_statitstics_modeling.tabulated_integrands[
+            "bias(ztrue,M)"
+        ]
+        if miscentering_params is None:
+            excess_surface_mass_density = self.profile.excess_surface_mass_density(
+                *profile_args, halo_bias=halo_bias
+            )
+        else:
+            if self.miscentered_profile is None:
+                raise ValueError(
+                    "miscentering_params requires a miscentered_profile in ClusterWeakLensing."
+                )
+            f_cen, sigma_off = miscentering_params
+            if not 0.0 <= f_cen <= 1.0:
+                raise ValueError(f"f_cen (={f_cen}) must be between 0 and 1.")
+            # f_cen DeltaSigma_cen + (1 - f_cen) DeltaSigma_off(sigma_off)
+            excess_surface_mass_density = 0.0
+            if f_cen > 0.0:
+                excess_surface_mass_density = (
+                    f_cen
+                    * self.profile.excess_surface_mass_density(
+                        *profile_args, halo_bias=halo_bias
+                    )
+                )
+            if f_cen < 1.0:
+                excess_surface_mass_density = excess_surface_mass_density + (
+                    1.0 - f_cen
+                ) * self.miscentered_profile.excess_surface_mass_density(
+                    *profile_args, sigma_off, halo_bias=halo_bias
+                )
         # excess surface mass density in a richness bin, integrated on mass w HMF
         # Dimension: (z_obs_bin, lambda_obs_bin, ztrue, radius)
         excess_surface_density_in_window_lambda_obs_mass_integrated = (
@@ -156,7 +204,9 @@ class ClusterWeakLensing:
         ) / cluster_counts[:, :, np.newaxis]
         return wl_profile_mean_values
 
-    def get_DeltaSigma(self, z_obs_edges, lambda_obs_edges, radius_edges):
+    def get_DeltaSigma(
+        self, z_obs_edges, lambda_obs_edges, radius_edges, miscentering_params=None
+    ):
         """Compute excess surface density profile.
 
         Parameters
@@ -167,6 +217,8 @@ class ClusterWeakLensing:
             Edges of richness bins for the integration.
         radius_edges : numpy.ndarray
             Edges of radial bins for the profile.
+        miscentering_params : tuple, None
+            If not None, ``(f_cen, sigma_off)``, see ``_get_profile``.
 
         Returns
         -------
@@ -179,10 +231,16 @@ class ClusterWeakLensing:
             lambda_obs_edges,
             radius_edges,
             effective_inverse_critical_surface_mass_density=None,
+            miscentering_params=miscentering_params,
         )
 
     def get_gt(
-        self, z_obs_edges, lambda_obs_edges, radius_edges, opt_sel_bias_params=None
+        self,
+        z_obs_edges,
+        lambda_obs_edges,
+        radius_edges,
+        opt_sel_bias_params=None,
+        miscentering_params=None,
     ):
         """Compute reduced shear profile.
 
@@ -200,8 +258,13 @@ class ClusterWeakLensing:
             ``self.optical_selection_bias_correction(radius_mean, *opt_sel_bias_params)``,
             with ``radius_mean`` the centers of the radial bins.
             The values must be ``opt_sel_bias_params=(R0, A, alpha, beta, gamma)``,
-            where each individual parameter must be either float or have shape
-            (redshift, richness) bins.
+            or ``(R0, A, alpha, beta, gamma, offset)`` to also fit the value of the
+            correction at small radii (1 by default), where each individual parameter
+            must be either float or have shape (redshift, richness) bins.
+        miscentering_params : tuple, None
+            If not None, ``(f_cen, sigma_off)``, see ``_get_profile``. The optical
+            selection bias correction is applied to the total (centered + miscentered)
+            profile.
 
         Returns
         -------
@@ -232,6 +295,10 @@ class ClusterWeakLensing:
         # output : (z_obs, lambda_obs, radius)
         opt_sel_corr = 1
         if opt_sel_bias_params is not None:
+            if len(opt_sel_bias_params) not in (5, 6):
+                raise ValueError(
+                    "opt_sel_bias_params must be (R0, A, alpha, beta, gamma[, offset])."
+                )
             # correction at the center of the radial bins : (z_obs, lambda_obs, radius)
             opt_sel_corr = self.optical_selection_bias_correction(
                 0.5 * (radius_edges[:-1] + radius_edges[1:]),
@@ -243,12 +310,13 @@ class ClusterWeakLensing:
                 lambda_obs_edges,
                 radius_edges,
                 effective_inverse_critical_surface_mass_density,
+                miscentering_params=miscentering_params,
             )
             * opt_sel_corr
         )
 
     @staticmethod
-    def optical_selection_bias_correction(R, R0, A, alpha, beta, gamma):
+    def optical_selection_bias_correction(R, R0, A, alpha, beta, gamma, offset=1.0):
         """
         Correction for the weak lensing optical selection bias to account for
         miscentering and projection effects. To be multiplied directly to the WL
@@ -269,6 +337,9 @@ class ClusterWeakLensing:
             Slope at large radii, dimensions should be (z_obs_bins, lambda_obs_bins)
         gamma: numpy.ndarray
             Smoothness of the transition between slopes, dimensions should be (z_obs_bins, lambda_obs_bins)
+        offset: numpy.ndarray, float
+            Value of the correction at small radii (default 1), dimensions should be
+            (z_obs_bins, lambda_obs_bins). Note that it rescales the 1-halo term too.
 
 
         Retruns
@@ -279,7 +350,7 @@ class ClusterWeakLensing:
         # Reasonable values for the parameters are: R0=1.20cMpc/h, A=0.20, alpha=4.0,
         # beta=−0.3 , gamma=1.6
         x = R / R0
-        return A * x**alpha * (1 + x**gamma) ** ((beta - alpha) / gamma) + 1
+        return A * x**alpha * (1 + x**gamma) ** ((beta - alpha) / gamma) + offset
 
 
 class ClusterWeakLensingCovariance:
