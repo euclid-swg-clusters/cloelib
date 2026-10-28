@@ -197,7 +197,7 @@ class HaloProfileCore:
             self.sigma_nz[idx],
         )
 
-    def sigma_crit_inv_eff(self, z, idx, Delta_z = 0.05, z_grid_size=50):
+    def sigma_crit_inv_eff(self, z, idx, Delta_z = 0.05, z_grid_size=50, power=1):
         r"""
         Effective inverse critical surface mass density.
 
@@ -218,14 +218,18 @@ class HaloProfileCore:
             galaxies scattered into the source sample.
         z_grid_size: int, optional
             Number of source-redshift grid points used for the quadrature
+        power: int, optional
+            Power n of the inverse critical surface mass density averaged over the
+            sources, <Sigma_crit^-n>. Default 1; n=2 is used for the reduced shear.
         Returns
         -------
         m_sigma_crit_m1: float
-            Effective inverse critical surface mass density (units : pc^2 / Msun / h)
+            Effective inverse critical surface mass density to the power n
+            (units : (pc^2 / Msun / h)^n)
         """
         z_s = np.linspace(z + Delta_z, self.zs_max, z_grid_size, axis=1) 
         z_s[z_s>=self.zs_max]=self.zs_max-1.0e-5 # the last term is to avoid problem with the normalization n_zs_norM. It can be removed setting zs_max higer than max z (i.e. z_true)
-        sig_crit_m1 = self.n_zs(z_s,idx) * 1.0 / self.sigma_crit(z, z_s)
+        sig_crit_m1 = self.n_zs(z_s,idx) * 1.0 / self.sigma_crit(z, z_s)**power
         with np.errstate(divide="ignore", invalid="ignore"):
             sig_crit_inv_eff = self.n_zs_norM(z, idx, Delta_z) * simpson(
                 sig_crit_m1, x=z_s

@@ -93,8 +93,9 @@ class ClusterWeakLensing:
         radius_edges,
         effective_inverse_critical_surface_mass_density=None,
         miscentering_params=None,
+        effective_inverse_critical_surface_mass_density_2=None,
     ):
-        """Compute weak lensing profile, it can be excess surface density or reduced shear.
+        r"""Compute weak lensing profile, it can be excess surface density or reduced shear.
 
         Parameters
         ----------
@@ -105,15 +106,28 @@ class ClusterWeakLensing:
         radius_edges : numpy.ndarray
             Edges of radial bins for the profile.
         effective_inverse_critical_surface_mass_density : numpy.array, None
-            The effective inverse of the critical surface density.
-            If provided, it must be shape (ztrue, M, radius) and this function
-            returns the reduced shear, else it returns the excess surface density.
+            The effective inverse of the critical surface density <Sigma_crit^-1>.
+            If provided, it must be shape (z_obs, ztrue) and this function
+            returns the tangential shear, else it returns the excess surface density.
         miscentering_params : tuple, None
             If not None, ``(f_cen, sigma_off)``: a fraction ``f_cen`` of the clusters is
             correctly centered and the rest is miscentered with a Rayleigh distribution
             of the offsets of scale ``sigma_off`` (physical Mpc/h), modeled with
             ``miscentered_profile``. Both terms include the 2-halo term if the profiles
             do.
+        effective_inverse_critical_surface_mass_density_2 : numpy.array, None
+            The effective inverse of the squared critical surface density
+            <Sigma_crit^-2>, with shape (z_obs, ztrue). If provided together with
+            ``effective_inverse_critical_surface_mass_density``, the reduced shear of
+            each halo is computed as (Seitz & Schneider 1997)
+
+            .. math::
+                g_t = \frac{\langle\Sigma_{\rm cr}^{-1}\rangle\Delta\Sigma}
+                {1 - \langle\Sigma_{\rm cr}^{-2}\rangle /
+                \langle\Sigma_{\rm cr}^{-1}\rangle\,\Sigma}
+
+            separately for the centered and miscentered clusters, before
+            the integration in mass and redshift.
 
         Returns
         -------
@@ -153,10 +167,13 @@ class ClusterWeakLensing:
         halo_bias = self.cluster_statitstics_modeling.tabulated_integrands[
             "bias(ztrue,M)"
         ]
+        reduced_shear = (
+            effective_inverse_critical_surface_mass_density is not None
+            and effective_inverse_critical_surface_mass_density_2 is not None
+        )
+        # (fraction, profile, extra args of the profile) of each cluster population
         if miscentering_params is None:
-            excess_surface_mass_density = self.profile.excess_surface_mass_density(
-                *profile_args, halo_bias=halo_bias
-            )
+            components = [(1.0, self.profile, ())]
         else:
             if self.miscentered_profile is None:
                 raise ValueError(
@@ -166,35 +183,74 @@ class ClusterWeakLensing:
             if not 0.0 <= f_cen <= 1.0:
                 raise ValueError(f"f_cen (={f_cen}) must be between 0 and 1.")
             # f_cen DeltaSigma_cen + (1 - f_cen) DeltaSigma_off(sigma_off)
-            excess_surface_mass_density = 0.0
-            if f_cen > 0.0:
-                excess_surface_mass_density = (
-                    f_cen
-                    * self.profile.excess_surface_mass_density(
-                        *profile_args, halo_bias=halo_bias
+            components = [
+                (f_cen, self.profile, ()),
+                (1.0 - f_cen, self.miscentered_profile, (sigma_off,)),
+            ]
+            components = [comp for comp in components if comp[0] > 0.0]
+        # excess surface mass density (and surface mass density for the reduced
+        # shear) of each population : (ztrue, M, radius)
+        excess_surface_mass_density = [
+            (
+                frac,
+                prof.excess_surface_mass_density(
+                    *profile_args, *extra, halo_bias=halo_bias
+                ),
+                prof.surface_mass_density(*profile_args, *extra, halo_bias=halo_bias)
+                if reduced_shear
+                else None,
+            )
+            for frac, prof, extra in components
+        ]
+
+        if not reduced_shear:
+            # excess surface mass density in a richness bin, integrated on mass w HMF
+            # Dimension: (z_obs_bin, lambda_obs_bin, ztrue, radius)
+            excess_surface_density_in_window_lambda_obs_mass_integrated = (
+                self.cluster_statitstics_modeling.integrate_probe_function_in_mass(
+                    sum(frac * dsig for frac, dsig, _ in excess_surface_mass_density),
+                    window_redshift_lambda_obs[:, :, :, :, np.newaxis],
+                )
+            )
+            # Apply effective inverse critical surface mass density if provided
+            if effective_inverse_critical_surface_mass_density is not None:
+                excess_surface_density_in_window_lambda_obs_mass_integrated *= (
+                    effective_inverse_critical_surface_mass_density[
+                        :, np.newaxis, :, np.newaxis
+                    ]
+                )
+        else:
+            # reduced shear of each halo depends on the source redshift distribution
+            # of the z_obs bin, so the mass integral is done for each z_obs bin
+            excess_surface_density_in_window_lambda_obs_mass_integrated = []
+            for ind_z in range(window_redshift_lambda_obs.shape[0]):
+                sig_crit_inv = effective_inverse_critical_surface_mass_density[ind_z]
+                # <Sigma_crit^-2>/<Sigma_crit^-1>, 0 where there are no sources
+                sig_crit_inv_ratio = np.divide(
+                    effective_inverse_critical_surface_mass_density_2[ind_z],
+                    sig_crit_inv,
+                    out=np.zeros_like(sig_crit_inv),
+                    where=sig_crit_inv > 0.0,
+                )[:, np.newaxis, np.newaxis]
+                # reduced shear : (ztrue, M, radius)
+                reduced_shear_profile = sum(
+                    frac
+                    * sig_crit_inv[:, np.newaxis, np.newaxis]
+                    * dsig
+                    / (1.0 - sig_crit_inv_ratio * sig)
+                    for frac, dsig, sig in excess_surface_mass_density
+                )
+                excess_surface_density_in_window_lambda_obs_mass_integrated.append(
+                    self.cluster_statitstics_modeling.integrate_probe_function_in_mass(
+                        reduced_shear_profile,
+                        window_redshift_lambda_obs[ind_z : ind_z + 1, :, :, :, np.newaxis],
                     )
                 )
-            if f_cen < 1.0:
-                excess_surface_mass_density = excess_surface_mass_density + (
-                    1.0 - f_cen
-                ) * self.miscentered_profile.excess_surface_mass_density(
-                    *profile_args, sigma_off, halo_bias=halo_bias
-                )
-        # excess surface mass density in a richness bin, integrated on mass w HMF
-        # Dimension: (z_obs_bin, lambda_obs_bin, ztrue, radius)
-        excess_surface_density_in_window_lambda_obs_mass_integrated = (
-            self.cluster_statitstics_modeling.integrate_probe_function_in_mass(
-                excess_surface_mass_density, window_redshift_lambda_obs[:,:,:,:,np.newaxis]
+            excess_surface_density_in_window_lambda_obs_mass_integrated = np.concatenate(
+                excess_surface_density_in_window_lambda_obs_mass_integrated, axis=0
             )
-        )
 
         # redshift part
-
-        # Apply effective inverse critical surface mass density if provided
-        if effective_inverse_critical_surface_mass_density is not None:
-            excess_surface_density_in_window_lambda_obs_mass_integrated *=effective_inverse_critical_surface_mass_density[
-                :, np.newaxis, :, np.newaxis
-            ]
 
         # output : (z_obs, lambda_obs, radius)
         wl_profile_mean_values = (
@@ -241,6 +297,7 @@ class ClusterWeakLensing:
         radius_edges,
         opt_sel_bias_params=None,
         miscentering_params=None,
+        reduced_shear=True,
     ):
         """Compute reduced shear profile.
 
@@ -265,6 +322,9 @@ class ClusterWeakLensing:
             If not None, ``(f_cen, sigma_off)``, see ``_get_profile``. The optical
             selection bias correction is applied to the total (centered + miscentered)
             profile.
+        reduced_shear : bool
+            If True (default), returns the reduced shear g_t = gamma_t / (1 - kappa),
+            see ``_get_profile``. If False, returns the tangential shear gamma_t.
 
         Returns
         -------
@@ -276,21 +336,24 @@ class ClusterWeakLensing:
         # mean z_obs per bin, used to select the tomographic bin index
         z_obs_mean = 0.5 * (z_obs_edges[:-1] + z_obs_edges[1:])
 
-        # Effective inverse critical surface mass density : (z_obs, ztrue)
+        # Effective inverse critical surface mass density <Sigma_crit^-1> and
+        # <Sigma_crit^-2> (for the reduced shear) : (z_obs, ztrue)
+        ztrue = self.cluster_statitstics_modeling.tabulated_integrands["ztrue"]
         effective_inverse_critical_surface_mass_density = np.zeros(
-            (
-                z_obs_edges_size,
-                self.cluster_statitstics_modeling.tabulated_integrands["ztrue"].size,
-            )
+            (z_obs_edges_size, ztrue.size)
+        )
+        effective_inverse_critical_surface_mass_density_2 = (
+            np.zeros((z_obs_edges_size, ztrue.size)) if reduced_shear else None
         )
         for ind_z in range(z_obs_edges_size):
             idx = self.profile.core._get_tomo_bin_index(z_obs_mean[ind_z])
             effective_inverse_critical_surface_mass_density[ind_z] = (
-                self.profile.core.sigma_crit_inv_eff(
-                    self.cluster_statitstics_modeling.tabulated_integrands["ztrue"],
-                    idx,
-                )
+                self.profile.core.sigma_crit_inv_eff(ztrue, idx)
             )
+            if reduced_shear:
+                effective_inverse_critical_surface_mass_density_2[ind_z] = (
+                    self.profile.core.sigma_crit_inv_eff(ztrue, idx, power=2)
+                )
 
         # output : (z_obs, lambda_obs, radius)
         opt_sel_corr = 1
@@ -311,6 +374,7 @@ class ClusterWeakLensing:
                 radius_edges,
                 effective_inverse_critical_surface_mass_density,
                 miscentering_params=miscentering_params,
+                effective_inverse_critical_surface_mass_density_2=effective_inverse_critical_surface_mass_density_2,
             )
             * opt_sel_corr
         )

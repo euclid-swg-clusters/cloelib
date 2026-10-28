@@ -651,6 +651,37 @@ def test_lensing_miscentering():
         rtol=1e-10,
     )
 
+    print("    reduced shear")
+    gt_lin = cluster_wl.get_gt(
+        *args, miscentering_params=(0.7, sigma_off), reduced_shear=False
+    )
+    ratio = gt_mix / gt_lin
+    # g_t = gamma_t / (1 - kappa) > gamma_t, with kappa decreasing with radius
+    assert np.all(ratio > 1.0) and np.all(ratio < 1.5)
+    assert np.all(np.diff(ratio, axis=-1) < 0.0)
+    # with <Sigma_crit^-2> = 0 the reduced shear is the tangential shear
+    sig_crit_inv = np.array(
+        [
+            cluster_wl.profile.core.sigma_crit_inv_eff(
+                cluster_statistics_modeling.tabulated_integrands["ztrue"],
+                cluster_wl.profile.core._get_tomo_bin_index(z),
+            )
+            for z in 0.5 * (z_obs_edges[:-1] + z_obs_edges[1:])
+        ]
+    )
+    assert_allclose(
+        cluster_wl._get_profile(
+            *args,
+            sig_crit_inv,
+            miscentering_params=(0.7, sigma_off),
+            effective_inverse_critical_surface_mass_density_2=np.zeros_like(
+                sig_crit_inv
+            ),
+        ),
+        gt_lin,
+        rtol=1e-10,
+    )
+
     print("    errors")
     assert_raises(ValueError, cluster_wl.get_gt, *args, opt_sel_bias_params=corr_pars[:4])
     assert_raises(ValueError, cluster_wl.get_DeltaSigma, *args, miscentering_params=(1.2, sigma_off))
