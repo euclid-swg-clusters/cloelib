@@ -651,6 +651,43 @@ def test_lensing_miscentering():
         rtol=1e-10,
     )
 
+    print("    PCA form of the optical selection bias correction")
+    rng = np.random.default_rng(3)
+    B_mean = 1.0 + 0.1 * np.log(R_mean)
+    modes = np.linalg.qr(rng.standard_normal((R_mean.size, 2)))[0].T
+    amplitudes = rng.normal(0.0, 0.1, (2, 2, 2))
+    gt_pca = cluster_wl.get_gt(
+        *args,
+        miscentering_params=(0.7, sigma_off),
+        opt_sel_bias_pca=(B_mean, modes, amplitudes),
+    )
+    corr_pca = cluster_wl.optical_selection_bias_pca_correction(B_mean, modes, amplitudes)
+    assert corr_pca.shape == (2, 2, 5)
+    assert_allclose(corr_pca[1, 0], B_mean + amplitudes[1, 0] @ modes, rtol=1e-12)
+    assert_allclose(gt_pca, gt_mix * corr_pca, rtol=1e-12)
+    # templates can also depend on the bin
+    assert_allclose(
+        cluster_wl.optical_selection_bias_pca_correction(
+            np.broadcast_to(B_mean, (2, 2, 5)), np.broadcast_to(modes, (2, 2, 2, 5)), amplitudes
+        ),
+        corr_pca,
+        rtol=1e-12,
+    )
+    # covariance from the amplitudes: block diagonal, equal to the scatter of the
+    # corrected profile for Gaussian amplitudes
+    amp_cov = np.einsum("zlij,zlkj->zlik", *(2 * [rng.normal(0.0, 0.05, (2, 2, 2, 2))]))
+    cov_pca = cluster_wl.optical_selection_bias_pca_covariance(gt_mix, modes, amp_cov)
+    assert cov_pca.shape == (2, 2, 2, 2, 5, 5)
+    assert np.all(cov_pca[0, 1] == 0.0) and np.all(cov_pca[:, :, 0, 1] == 0.0)
+    samples = np.array(
+        [
+            gt_mix[1, 1]
+            * cluster_wl.optical_selection_bias_pca_correction(B_mean, modes, a)
+            for a in rng.multivariate_normal(amplitudes[1, 1], amp_cov[1, 1], 40000)
+        ]
+    )
+    assert_allclose(np.cov(samples.T), cov_pca[1, 1, 1, 1], rtol=0.05, atol=1e-3 * np.max(cov_pca))
+
     print("    reduced shear")
     gt_lin = cluster_wl.get_gt(
         *args, miscentering_params=(0.7, sigma_off), reduced_shear=False
@@ -684,6 +721,13 @@ def test_lensing_miscentering():
 
     print("    errors")
     assert_raises(ValueError, cluster_wl.get_gt, *args, opt_sel_bias_params=corr_pars[:4])
+    assert_raises(
+        ValueError,
+        cluster_wl.get_gt,
+        *args,
+        opt_sel_bias_params=corr_pars,
+        opt_sel_bias_pca=(B_mean, modes, amplitudes),
+    )
     assert_raises(ValueError, cluster_wl.get_DeltaSigma, *args, miscentering_params=(1.2, sigma_off))
     cluster_wl_cen = ClusterWeakLensing(
         cluster_statistics_modeling,

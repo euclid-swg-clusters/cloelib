@@ -298,6 +298,7 @@ class ClusterWeakLensing:
         opt_sel_bias_params=None,
         miscentering_params=None,
         reduced_shear=True,
+        opt_sel_bias_pca=None,
     ):
         """Compute reduced shear profile.
 
@@ -325,12 +326,22 @@ class ClusterWeakLensing:
         reduced_shear : bool
             If True (default), returns the reduced shear g_t = gamma_t / (1 - kappa),
             see ``_get_profile``. If False, returns the tangential shear gamma_t.
+        opt_sel_bias_pca: tuple, None
+            If not None, applies the PCA template form of the optical selection bias
+            correction, ``(B_mean, modes, amplitudes)``, multiplying the profile by
+            ``self.optical_selection_bias_pca_correction(B_mean, modes, amplitudes)``.
+            The templates must be tabulated at the radial bins of ``radius_edges``.
+            It cannot be used together with ``opt_sel_bias_params``.
 
         Returns
         -------
         gt_mean_values : numpy.ndarray
            Reduced shear in redshift, richness, and radial bins.
         """
+        if opt_sel_bias_params is not None and opt_sel_bias_pca is not None:
+            raise ValueError(
+                "Only one of opt_sel_bias_params and opt_sel_bias_pca can be given."
+            )
         z_obs_edges_size = len(z_obs_edges) - 1
 
         # mean z_obs per bin, used to select the tomographic bin index
@@ -367,6 +378,8 @@ class ClusterWeakLensing:
                 0.5 * (radius_edges[:-1] + radius_edges[1:]),
                 *(np.asarray(par)[..., np.newaxis] for par in opt_sel_bias_params),
             )
+        if opt_sel_bias_pca is not None:
+            opt_sel_corr = self.optical_selection_bias_pca_correction(*opt_sel_bias_pca)
         return (
             self._get_profile(
                 z_obs_edges,
@@ -415,6 +428,81 @@ class ClusterWeakLensing:
         # beta=−0.3 , gamma=1.6
         x = R / R0
         return A * x**alpha * (1 + x**gamma) ** ((beta - alpha) / gamma) + offset
+
+    @staticmethod
+    def optical_selection_bias_pca_correction(B_mean, modes, amplitudes):
+        r"""
+        PCA template form of the optical selection bias correction,
+
+        .. math::
+            B(R) = \bar B(R) + \sum_{i=1}^{n} a_i\,e_i(R),
+
+        with the mean correction :math:`\bar B` and the modes :math:`e_i` calibrated
+        on simulations (principal components of the bin-to-bin variation of the
+        correction) and the amplitudes :math:`a_i` free in each bin. To be multiplied
+        directly to the WL profile integrated in observed richness and redshift.
+
+        Parameters
+        ----------
+        B_mean: numpy.ndarray
+            Mean correction at the radial bins, dimension (radius) or
+            (z_obs_bins, lambda_obs_bins, radius)
+        modes: numpy.ndarray
+            Modes at the radial bins, dimension (n_modes, radius) or
+            (z_obs_bins, lambda_obs_bins, n_modes, radius)
+        amplitudes: numpy.ndarray
+            Amplitudes of the modes, dimension (z_obs_bins, lambda_obs_bins, n_modes)
+
+        Returns
+        -------
+            Correction for WL optical selection bias. Dimension (z_obs_bins, lambda_obs_bins, radius)
+        """
+        return np.asarray(B_mean) + np.einsum(
+            "...i,...ir->...r", np.asarray(amplitudes), np.asarray(modes)
+        )
+
+    @staticmethod
+    def optical_selection_bias_pca_covariance(gt, modes, amplitudes_cov):
+        r"""
+        Covariance of the WL profile from the uncertainty of the amplitudes of the
+        PCA form of the optical selection bias correction. The correction is linear in
+        the amplitudes, so a Gaussian prior on them, of covariance :math:`C_a`, is
+        marginalized analytically adding to the covariance of the profile
+
+        .. math::
+            C_{\rm PCA} = {\rm diag}(g_t)\, X C_a X^T {\rm diag}(g_t), \qquad X = (e_1, \dots, e_n),
+
+        with the amplitudes fixed to the mean of the prior in the model. The priors of
+        different bins are independent, so the covariance is block diagonal.
+
+        Parameters
+        ----------
+        gt: numpy.ndarray
+            Model profile, without the correction, in redshift, richness, and radial bins.
+        modes: numpy.ndarray
+            Modes at the radial bins, dimension (n_modes, radius) or
+            (z_obs_bins, lambda_obs_bins, n_modes, radius)
+        amplitudes_cov: numpy.ndarray
+            Covariance of the amplitudes, dimension (z_obs_bins, lambda_obs_bins, n_modes, n_modes)
+
+        Returns
+        -------
+        cov_pca : numpy.ndarray
+            Covariance in the format of ``ClusterWeakLensingCovariance.get_gt_covariance``.
+            Dimension: (z_obs, z_obs, lambda_obs, lambda_obs, radius, radius).
+        """
+        gt = np.asarray(gt)
+        modes = np.broadcast_to(modes, gt.shape[:2] + np.shape(modes)[-2:])
+        # (z_obs, lambda_obs, radius, radius)
+        cov_bin = (
+            np.einsum("zlir,zlij,zljs->zlrs", modes, np.asarray(amplitudes_cov), modes)
+            * gt[..., :, np.newaxis]
+            * gt[..., np.newaxis, :]
+        )
+        n_z, n_l = gt.shape[:2]
+        return np.einsum(
+            "zy,lm,zlrs->zylmrs", np.identity(n_z), np.identity(n_l), cov_bin
+        )
 
 
 class ClusterWeakLensingCovariance:
