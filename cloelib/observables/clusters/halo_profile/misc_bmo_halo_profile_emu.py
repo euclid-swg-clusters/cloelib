@@ -400,7 +400,11 @@ class MiscBMOHaloProfileEmu:
         log10_Rvir_grid = np.broadcast_to(
             log10_Rvir[:, :, np.newaxis], (Nz, NM, NR)
         ).reshape(-1)
-        c_grid = np.full(Nz * NM * NR, c)
+        # c is a scalar or has shape (Nz, NM)
+        c_grid = np.broadcast_to(
+            np.asarray(c, dtype=float)[..., np.newaxis] if np.ndim(c) == 2 else c,
+            (Nz, NM, NR),
+        ).reshape(-1)
         sigma_off_grid = np.full(Nz * NM * NR, sigma_off)
 
         X = np.column_stack(
@@ -440,8 +444,8 @@ class MiscBMOHaloProfileEmu:
             Lens redshifts, shape ``(Nz,)``.
         M : np.ndarray
             Halo masses (Msun / h), shape ``(NM,)``.
-        c : float
-            Concentration.
+        c : float or np.ndarray
+            Concentration, scalar or with shape ``(Nz, NM)``.
         sigma_off : float
             Scatter of the Rayleigh miscentering PDF (Mpc/h),
             see Eq. 8 of `Johnston et al. 2007
@@ -516,8 +520,8 @@ class MiscBMOHaloProfileEmu:
             Lens redshifts, shape ``(Nz,)``.
         M : np.ndarray
             Halo masses (Msun / h), shape ``(NM,)``.
-        c : float
-            Concentration.
+        c : float or np.ndarray
+            Concentration, scalar or with shape ``(Nz, NM)``.
         sigma_off : float
             Scatter of the Rayleigh miscentering PDF (Mpc/h),
             see Eq. 8 of `Johnston et al. 2007

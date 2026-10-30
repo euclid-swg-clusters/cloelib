@@ -45,6 +45,14 @@ class BMOHaloProfile:
         self.two_halo = two_halo
         self.trunc_fact = trunc_fact
 
+    @staticmethod
+    def _concentration_shape(c):
+        r"""
+        Concentration with shape (z.size, M.size, 1) to broadcast with the radii,
+        if it is given for each redshift and mass, else unchanged.
+        """
+        return np.asarray(c, dtype=float)[..., np.newaxis] if np.ndim(c) == 2 else c
+
     def _f_term(self, x):
         r"""
         BMO profile F term.
@@ -279,8 +287,8 @@ class BMOHaloProfile:
             Redshift.
         M: np.ndarray
             Mass (Msun / h).
-        c: float
-            Concentration.
+        c: float or np.ndarray
+            Concentration, scalar or with shape (z.size, M.size).
         halo_bias: np.ndarray (optional)
             Halo bias used for the 2h term, with shape (z.size, M.size).
         radius_units: str
@@ -295,7 +303,7 @@ class BMOHaloProfile:
         """
         Sigma = self._surface_mass_density_1h(
             *self.core.surface_mass_density_args(R, z, M, radius_units=radius_units),
-            c,
+            self._concentration_shape(c),
         )
 
         if self.two_halo != "None":
@@ -322,8 +330,8 @@ class BMOHaloProfile:
             Radial points (units : Mpc / h)
         z: np.ndarray
             Redshift.
-        c: float
-            Concentration.
+        c: float or np.ndarray
+            Concentration, scalar or with shape (z.size, M.size).
         M: np.ndarray
             Mass (Msun / h).
         halo_bias: np.ndarray (optional)
@@ -341,6 +349,7 @@ class BMOHaloProfile:
         R_outshape, RDelta, densityThreshold = self.core.surface_mass_density_args(
             R, z, M, radius_units=radius_units
         )
+        c = self._concentration_shape(c)
         DeltaSigma = self._mean_surface_mass_density_1h(
             R_outshape, RDelta, densityThreshold, c
         ) - self._surface_mass_density_1h(R_outshape, RDelta, densityThreshold, c)

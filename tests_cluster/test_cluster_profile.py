@@ -442,6 +442,22 @@ def test_gt_covariance():
     assert_equal(cov_auto[:, :, 0, 1], 0.0)
     assert np.abs(cov[:, :, 0, 1]).max() > 0.0
 
+    print("    concentration-mass relation")
+    # a constant relation gives the covariance of the constant concentration
+    cluster_wl_cM = ClusterWeakLensing(
+        cluster_statistics_modeling,
+        cluster_wl.profile,
+        halo_concentration=lambda z, M: np.full((z.size, M.size), 4.0),
+        selection_function=selection_function,
+    )
+    assert_allclose(
+        ClusterWeakLensingCovariance(cluster_wl_cM, n_eff=15.0, sigma_e=0.3).get_gt_covariance(
+            z_obs_edges, lambda_obs_edges, radius_edges
+        ),
+        cov,
+        rtol=1e-12,
+    )
+
     # Reference values from the notebook "Test Covariance lensing gammat.ipynb"
     # (last cell), computed with the original implementation of Wu et al. 2019
     # Eq. 10 using the same cloelib ingredients.
@@ -619,6 +635,77 @@ def test_lensing_miscentering():
     # the miscentering lowers DeltaSigma at small radii
     assert np.all(DS_off[..., 0] < DS_cen[..., 0])
 
+    print("    mixture of miscentered populations")
+    assert_allclose(
+        cluster_wl.get_DeltaSigma(*args, miscentering_params=((0.7, None), (0.3, sigma_off))),
+        DS_mix,
+        rtol=1e-12,
+    )
+    DS_off_narrow = cluster_wl.get_DeltaSigma(*args, miscentering_params=(0.0, 0.1))
+    assert_allclose(
+        cluster_wl.get_DeltaSigma(*args, miscentering_params=((0.4, 0.1), (0.6, sigma_off))),
+        0.4 * DS_off_narrow + 0.6 * DS_off,
+        rtol=1e-10,
+    )
+
+    print("    concentration-mass relation")
+    # constant relation = constant concentration
+    cluster_wl_cM = ClusterWeakLensing(
+        cluster_statistics_modeling,
+        cluster_wl.profile,
+        halo_concentration=lambda z, M: np.full((z.size, M.size), 4.0),
+        selection_function=selection_function,
+        miscentered_profile=cluster_wl.miscentered_profile,
+    )
+    assert_allclose(
+        cluster_wl_cM.get_DeltaSigma(*args, miscentering_params=(0.7, sigma_off)),
+        DS_mix,
+        rtol=1e-12,
+    )
+    # profiles with a concentration for each (z, M)
+    R_test, z_test, M_test = np.geomspace(0.3, 5.0, 4), np.array([0.3, 0.6]), np.array([1.0e14, 5.0e14])
+    c_test = np.array([[4.0, 5.0], [3.0, 6.0]])
+    for prof, extra in [
+        (BMOHaloProfile(matter_stat, trunc_fact=3.0, zs_max=2.0), ()),
+        (MiscBMOHaloProfileEmu(matter_stat, trunc_fact=3.0, zs_max=2.0), (sigma_off,)),
+    ]:
+        for func in (prof.surface_mass_density, prof.excess_surface_mass_density):
+            out = func(R_test, z_test, M_test, c_test, *extra)
+            for i in range(2):
+                for j in range(2):
+                    assert_allclose(
+                        out[i, j],
+                        func(R_test, z_test[i : i + 1], M_test[j : j + 1], c_test[i, j], *extra)[0, 0],
+                        rtol=1e-10,
+                    )
+
+    print("    comoving radii")
+    # with (almost) a single true redshift, comoving radii R are physical radii R / (1 + z)
+    cluster_wl_z = ClusterWeakLensing(
+        ClusterStatisticsModeling(
+            CastroHaloAbundance(matter_statistics=matter_stat),
+            integ_k_arr=np.geomspace(1.1e-4, 9.9, 400),
+            integ_mass_arr=np.logspace(13.5, 15.5, 41),
+            integ_lambda_true_arr=np.geomspace(5.0, 250.0, 51),
+            integ_ztrue_arr=np.array([0.5, 0.5001]),
+            area=10313.0,
+        ),
+        cluster_wl.profile,
+        halo_concentration=4.0,
+        selection_function=selection_function,
+        miscentered_profile=cluster_wl.miscentered_profile,
+    )
+    args_z = (np.array([0.4, 0.6]), lambda_obs_edges)
+    assert_allclose(
+        cluster_wl_z.get_DeltaSigma(
+            *args_z, radius_edges, miscentering_params=(0.7, sigma_off), comoving_radii=True
+        ),
+        cluster_wl_z.get_DeltaSigma(
+            *args_z, radius_edges / 1.50005, miscentering_params=(0.7, sigma_off)
+        ),
+        rtol=2e-4,
+    )
+
     print("    optical selection bias correction")
     corr_pars = (1.2, 0.2, 4.0, -0.3, 1.6)
     gt_mix = cluster_wl.get_gt(*args, miscentering_params=(0.7, sigma_off))
@@ -729,6 +816,9 @@ def test_lensing_miscentering():
         opt_sel_bias_pca=(B_mean, modes, amplitudes),
     )
     assert_raises(ValueError, cluster_wl.get_DeltaSigma, *args, miscentering_params=(1.2, sigma_off))
+    assert_raises(
+        ValueError, cluster_wl.get_DeltaSigma, *args, miscentering_params=((0.5, None), (0.4, sigma_off))
+    )
     cluster_wl_cen = ClusterWeakLensing(
         cluster_statistics_modeling,
         BMOHaloProfile(matter_stat, two_halo="sum", trunc_fact=3.0, zs_max=2.0),
