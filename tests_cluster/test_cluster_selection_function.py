@@ -424,6 +424,36 @@ def test_analytical_selectionfunction_compare_with_tabulated_values():
 
     # sanity check: values should be non-negative
     assert np.all(wf >= 0.), "window_redshift_richness_observed has negative values"
+
+
+def test_analytical_selectionfunction_window_lambda_observed():
+
+    sf = _get_test_analytic_sf()
+    # large projected fraction, with a power law that exceeds 1 at high richness
+    sf.fprj_lambda_norm, sf.fprj_lambda_z, sf.fprj_lambda_exponent = 0.1, 0.2, 0.5
+
+    lambda_obs_edges = np.array([20., 40., 60., 90., 150.])
+    z_true = np.array([0.3, 0.7])
+    lambda_true = np.array([10., 30., 60., 120.])
+
+    f_prj = sf._fprj_lambda_obs(z_true[:, None], lambda_true[None, :])
+    assert np.all(f_prj <= 1.0) and np.any(f_prj == 1.0)
+
+    # closed form vs numerical integral of the PDF
+    wf = sf.window_lambda_observed(lambda_obs_edges, z_true, lambda_true)
+    wf_num = np.zeros_like(wf)
+    for b in range(lambda_obs_edges.size - 1):
+        lob = np.linspace(lambda_obs_edges[b], lambda_obs_edges[b + 1], 4001)
+        pdf = sf._prob_lambda_obs(
+            z_true[None, :, None], lambda_true[None, None, :], lob[:, None, None]
+        ).astype(float)
+        wf_num[b] = np.trapezoid(pdf, x=lob, axis=0)
+    assert_allclose(wf, wf_num, atol=1e-6)
+
+
 if __name__ == "__main__":
     print("Comparison with Analytic SF")
     test_analytical_selectionfunction_compare_with_tabulated_values()
+
+    print("Analytic SF: closed-form window in lambda_obs")
+    test_analytical_selectionfunction_window_lambda_observed()
