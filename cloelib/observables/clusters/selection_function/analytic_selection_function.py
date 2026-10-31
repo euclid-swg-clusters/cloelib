@@ -213,8 +213,12 @@ class AnalyticSelectionFunction:
         Projected cluster fraction at the requested true richness points.
 
         ..math:
-            f_{\rm prj}(\lambda_{\rm true}) =
-            f_{\rm prj}_0 * \lambda_{\rm true}^{[f_{\rm prj}_{\rm exp} + + {f_{\rm prj}_z z_{\rm true}}
+            f_{\rm prj}(\lambda_{\rm true}) = \min\left[1,
+            f_{\rm prj}_0 * \lambda_{\rm true}^{[f_{\rm prj}_{\rm exp} + {f_{\rm prj}_z z_{\rm true}}]}\right]
+
+        The power law is capped at 1 (pure exponentially modified Gaussian),
+        otherwise the Gaussian component gets a negative weight at high
+        richness and redshift.
 
         Parameters
         ----------
@@ -228,8 +232,10 @@ class AnalyticSelectionFunction:
         fprj_lbobs: numpy.ndarray
             Projected cluster fraction.
         """
-        return self.fprj_lambda_norm * lambda_true ** (
-            self.fprj_lambda_exponent + self.fprj_lambda_z * z
+        return np.minimum(
+            self.fprj_lambda_norm
+            * lambda_true ** (self.fprj_lambda_exponent + self.fprj_lambda_z * z),
+            1.0,
         )
 
     @staticmethod
@@ -453,11 +459,12 @@ class AnalyticSelectionFunction:
 
         ..math:
             F(\lambda_{\rm obs}) =
-            (1 - f^{\rm prj}) \frac{1}{2}\left[1 + {\rm erf}\left(
-                \frac{\lambda_{\rm obs} - \mu}{\sqrt{2}\sigma}
-            \right)\right]
-            + f^{\rm prj} \exp\left[\frac{\tau}{2}(2\mu + \tau\sigma^2 - 2\lambda_{\rm obs})\right]
-            {\rm erfc}\left(\frac{\mu + \tau\sigma^2 - \lambda_{\rm obs}}{\sqrt{2}\sigma}\right)
+            \Phi\left(\frac{\lambda_{\rm obs} - \mu}{\sigma}\right)
+            - f^{\rm prj} \exp\left[-\tau(\lambda_{\rm obs} - \mu) + \frac{\tau^2\sigma^2}{2}\right]
+            \Phi\left(\frac{\lambda_{\rm obs} - \mu}{\sigma} - \tau\sigma\right)
+
+        with :math:`\Phi` the standard normal CDF (the Gaussian and the
+        exponentially modified Gaussian share the first term).
 
         and the bin integral is simply :math:`F(\lambda_{\rm obs}^{\rm high}) - F(\lambda_{\rm obs}^{\rm low})`.
 
@@ -497,7 +504,8 @@ class AnalyticSelectionFunction:
             phi_arg = (lob - mu) / (np.sqrt(2.0) * sig) - tau * sig / np.sqrt(2.0)
             exp_cdf = np.exp(exp_arg, dtype="float128") * 0.5 * (1.0 + spc.erf(phi_arg))
 
-            return (1.0 - f_prj) * gauss_cdf - f_prj * exp_cdf
+            # mixture: (1 - f_prj) * gauss_cdf + f_prj * (gauss_cdf - exp_cdf)
+            return gauss_cdf - f_prj * exp_cdf
 
         return (_cdf(_lob_high) - _cdf(_lob_low)).astype(float)
 
