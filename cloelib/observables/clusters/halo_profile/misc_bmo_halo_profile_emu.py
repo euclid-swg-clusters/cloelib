@@ -170,6 +170,9 @@ class MiscBMOHaloProfileEmu:
     two_halo : str, optional
         If ``"sum"``, the 1-halo and miscentered 2-halo profile are summed.
         If ``"max"``, the maximum between them is considered at each point.
+        If ``"sum_exclusion"``, the 1-halo and the miscentered 2-halo profile with
+        nonlinear power spectrum and halo exclusion inside R_Delta are summed
+        (see ``HaloProfileCore.two_halo_exclusion``).
         If ``"None"``, the 2-halo is not included. Default is ``"None"``.
     trunc_fact : float, optional
         Truncation radius in units of the overdensity radius
@@ -178,6 +181,9 @@ class MiscBMOHaloProfileEmu:
         Hidden-layer width of the emulator networks. Default ``512``.
     zs_max : float, optional
         Maximum source redshift for lensing calculations.
+    exclusion_background : float or callable, optional
+        Fraction of the mean density excluded inside R_Delta by the 2-halo term
+        with exclusion (number or function of z). Default 1.
 
     Notes
     -----
@@ -202,12 +208,14 @@ class MiscBMOHaloProfileEmu:
         trunc_fact: float = 3.0,
         hidden_size: int = 512,
         zs_max: float = 2.0,
+        exclusion_background=1.0,
     ):
         self.core = HaloProfileCore(
             matter_statistics,
             overdensity_type=overdensity_type,
             overdensity=overdensity,
             zs_max=zs_max,
+            exclusion_background=exclusion_background,
         )
 
         self.two_halo = two_halo
@@ -490,6 +498,7 @@ class MiscBMOHaloProfileEmu:
                 halo_bias,
                 radius_units,
                 sigma_off=sigma_off,
+                R_exc=RDelta[..., 0],
             )
 
         self.core.check_profile_shape(R, z, M, Sigma_off)
@@ -566,6 +575,7 @@ class MiscBMOHaloProfileEmu:
                 halo_bias,
                 radius_units,
                 sigma_off=sigma_off,
+                R_exc=RDelta[..., 0],
             )
 
         self.core.check_profile_shape(R, z, M, DeltaSigma_off)

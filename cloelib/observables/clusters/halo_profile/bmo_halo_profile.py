@@ -15,6 +15,7 @@ class BMOHaloProfile:
         two_halo: str = "None",
         trunc_fact: float = 3.0,
         zs_max: float = 2.0,
+        exclusion_background=1.0,
     ):
         """
         BMO profile class.
@@ -29,17 +30,25 @@ class BMOHaloProfile:
         two_halo : str, optional
             If "sum", the 1-halo and 2-halo profile are summed.
             If "max", the maximum between them is considered at each point.
+            If "sum_exclusion", the 1-halo and the 2-halo profile with nonlinear
+            power spectrum and halo exclusion inside R_Delta are summed (requires
+            nonlinear_perturbations in MatterStatistics, see
+            `HaloProfileCore.two_halo_exclusion`).
             If "None", the 2-halo is not included. Default is "None".
         z : array_like, optional
             Redshift grid for calculations.
         zs_max : float, optional
             Maximum source redshift for lensing calculations.
+        exclusion_background : float or callable, optional
+            Fraction of the mean density excluded inside R_Delta by the 2-halo
+            term with exclusion (number or function of z). Default 1.
         """
         self.core = HaloProfileCore(
             matter_statistics,
             overdensity_type=overdensity_type,
             overdensity=overdensity,
             zs_max=zs_max,
+            exclusion_background=exclusion_background,
         )
 
         self.two_halo = two_halo
@@ -301,14 +310,16 @@ class BMOHaloProfile:
             Surface mass density profile (units : h * Msun / pc**2).
             Shape: (z.size, M.size, R.size).
         """
+        R_outshape, RDelta, densityThreshold = self.core.surface_mass_density_args(
+            R, z, M, radius_units=radius_units
+        )
         Sigma = self._surface_mass_density_1h(
-            *self.core.surface_mass_density_args(R, z, M, radius_units=radius_units),
-            self._concentration_shape(c),
+            R_outshape, RDelta, densityThreshold, self._concentration_shape(c)
         )
 
         if self.two_halo != "None":
             Sigma = self.core.include_surface_mass_density_2h(
-                Sigma, self.two_halo, R, z, halo_bias, radius_units
+                Sigma, self.two_halo, R, z, halo_bias, radius_units, R_exc=RDelta[..., 0]
             )
 
         self.core.check_profile_shape(R, z, M, Sigma)
@@ -356,7 +367,7 @@ class BMOHaloProfile:
 
         if self.two_halo != "None":
             DeltaSigma = self.core.include_excess_surface_mass_density_2h(
-                DeltaSigma, self.two_halo, R, z, halo_bias, radius_units
+                DeltaSigma, self.two_halo, R, z, halo_bias, radius_units, R_exc=RDelta[..., 0]
             )
 
         self.core.check_profile_shape(R, z, M, DeltaSigma)

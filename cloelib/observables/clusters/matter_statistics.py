@@ -23,6 +23,7 @@ class MatterStatistics:
         interpolate_da: bool = True,
         z=np.linspace(1.0e-5, 2.0 - 1.0e-5, 100),
         k=np.geomspace(1e-4, 10, 500),
+        nonlinear_perturbations: Perturbations = None,
     ):
         r"""Auxiliary class computing quantities used in galaxy cluster models.
 
@@ -45,6 +46,11 @@ class MatterStatistics:
             A default interpolation is set when class is instanciated with
             interpolate_da=True. For a more customized interpolation, check
             the set_angular_diameter_distance_interpolation function.
+        nonlinear_perturbations : Perturbations, optional
+            Object providing the nonlinear cold dark matter + baryons power
+            spectrum (`matter_power_spectrum_cb`), used by the 2-halo term with
+            halo exclusion (`two_halo="sum_exclusion"` of the halo profiles).
+            It must share the background of `perturbations`.
 
         Notes
         ----------
@@ -54,11 +60,15 @@ class MatterStatistics:
         cold dark matter + baryons (no neutrinos) power spectra.
         """
         self.perturbations = perturbations
+        self.nonlinear_perturbations = nonlinear_perturbations
         self.k = k
 
         # Interpolators
         self.Pk_interp_cb = None
+        self.Pk_interp_cb_nl = None
         self.da_interp = None
+        # tables of the nonlinear correlation function, for each redshift
+        self._xi_nl_tables = {}
 
         # set P(k) interpolation usage
         if interpolate_pk:
@@ -95,8 +105,10 @@ class MatterStatistics:
         """If true, makes class uses interpolation for matter power spectrum computation."""
         if interpolate_pk:
             self.matter_power_spectrum_cb = self.Pk_interp_cb
+            self.matter_power_spectrum_cb_nl = self.Pk_interp_cb_nl
         else:
             self.matter_power_spectrum_cb = _matter_power_spectrum_cb_exact
+            self.matter_power_spectrum_cb_nl = self._matter_power_spectrum_cb_nl_exact
         self.__interpolate_pk = interpolate_pk
 
     @interpolate_da.setter
@@ -134,6 +146,36 @@ class MatterStatistics:
             k_hunit=True,
         )
 
+    def _matter_power_spectrum_cb_nl_exact(self, z, k):
+        r"""Computes the non interpolated nonlinear matter power spectrum.
+
+        This function computes the nonlinear cold dark matter + baryons power
+        spectrum, not including the massive neutrino contribution.
+
+        Parameters
+        ----------
+        z: float or np.ndarray
+            Redshift.
+        k: float or np.ndarray
+            Wavenumber.
+            Units: h Mpc^{-1}
+
+        Returns
+        -------
+        float or np.ndarray
+            Nonlinear matter power spectrum.
+        """
+        if self.nonlinear_perturbations is None:
+            raise ValueError(
+                "The nonlinear power spectrum requires nonlinear_perturbations in MatterStatistics."
+            )
+        return self.nonlinear_perturbations.matter_power_spectrum_cb(
+            z,
+            k,
+            hubble_units=True,
+            k_hunit=True,
+        )
+
     def set_matter_power_spectrum_interpolation(self, z, k):
         r"""Create internal interpolation of matter power spectrum.
 
@@ -154,6 +196,12 @@ class MatterStatistics:
             k,
             self._matter_power_spectrum_cb_exact(z, k),
         )
+        if self.nonlinear_perturbations is not None:
+            self.Pk_interp_cb_nl = interpolate.RectBivariateSpline(
+                z,
+                k,
+                self._matter_power_spectrum_cb_nl_exact(z, k),
+            )
 
     def set_angular_diameter_distance_interpolation(self, z):
         r"""Create internal interpolation of angular diameter distance.
@@ -169,7 +217,9 @@ class MatterStatistics:
             ext=2,
         )
 
-    def _generic_mass_density_2h(self, R, z, bessel_function, radius_units="Mpc/h"):
+    def _generic_mass_density_2h(
+        self, R, z, bessel_function, radius_units="Mpc/h", nonlinear=False
+    ):
         r"""
         Surface or excess surface 2-halo density profile.
 
@@ -186,6 +236,8 @@ class MatterStatistics:
             Bessel function that goes in the integrand with the power spectrum.
             Used to return the surface density or the excess surface density.
             It should take (ll*theta) as input.
+        nonlinear: bool, optional
+            If True, use the nonlinear power spectrum.
 
         Returns
         -------
@@ -193,6 +245,14 @@ class MatterStatistics:
             2-halo surface mass density profile (units : h * Msun / pc**2).
             Shape: (z.size, R.size).
         """
+        power_spectrum = (
+            self.matter_power_spectrum_cb_nl if nonlinear else self.matter_power_spectrum_cb
+        )
+        if power_spectrum is None:
+            raise ValueError(
+                "The nonlinear power spectrum requires nonlinear_perturbations in MatterStatistics."
+            )
+
         # Calculate all redshift base quantities and shape them (nz, 1)
         z_plus_1 = np.asarray(z)[:, np.newaxis] + 1.0
         D_A = self.angular_diameter_distance(z)[:, np.newaxis] * self.background.h
@@ -211,7 +271,7 @@ class MatterStatistics:
         ## 2. Integrand function
         def integrand(kl):
             ll = kl * z_plus_1 * D_A
-            Pk_vals = self.matter_power_spectrum_cb(z, kl)
+            Pk_vals = power_spectrum(z, kl)
             return bessel_function(ll * theta) * ll * Pk_vals
 
         ## 3. Integration
@@ -228,7 +288,7 @@ class MatterStatistics:
 
         return profile
 
-    def surface_mass_density_2h(self, R, z, radius_units="Mpc/h"):
+    def surface_mass_density_2h(self, R, z, radius_units="Mpc/h", nonlinear=False):
         r"""
         Surface 2-halo matter density profile.
 
@@ -243,6 +303,8 @@ class MatterStatistics:
         radius_units: str
             Unit for the input radius. Accepted values are:
             "Mpc/h", "radians", "degrees", "arcmin", "arcsec".
+        nonlinear: bool, optional
+            If True, use the nonlinear power spectrum.
 
         Returns
         -------
@@ -251,10 +313,10 @@ class MatterStatistics:
             Shape: (z.size, R.size).
         """
         return self._generic_mass_density_2h(
-            R, z, bessel_function=j0, radius_units=radius_units
+            R, z, bessel_function=j0, radius_units=radius_units, nonlinear=nonlinear
         )
 
-    def excess_surface_mass_density_2h(self, R, z, radius_units="Mpc/h"):
+    def excess_surface_mass_density_2h(self, R, z, radius_units="Mpc/h", nonlinear=False):
         r"""
         Excess surface 2-halo matter density profile.
 
@@ -270,6 +332,8 @@ class MatterStatistics:
         radius_units: str
             Unit for the input radius. Accepted values are:
             "Mpc/h", "radians", "degrees", "arcmin", "arcsec".
+        nonlinear: bool, optional
+            If True, use the nonlinear power spectrum.
 
         Returns
         -------
@@ -278,5 +342,63 @@ class MatterStatistics:
             Shape: (z.size, R.size).
         """
         return self._generic_mass_density_2h(
-            R, z, bessel_function=_bessel_j2, radius_units=radius_units
+            R, z, bessel_function=_bessel_j2, radius_units=radius_units, nonlinear=nonlinear
         )
+
+    def correlation_function_cb_nl(self, r, z, n_k=4096, r_min=1.0e-2, r_max=300.0, n_r=400):
+        r"""
+        Nonlinear cold dark matter + baryons correlation function.
+
+        .. math::
+
+            \xi_{\rm NL}(r, z) = \int \frac{k^3 P_{\rm NL}(k, z)}{2\pi^2}\,
+            j_0(kr)\, d\ln k
+
+        computed on a logarithmic k grid over the range of the power spectrum
+        tables (`self.k`) and tabulated in :math:`\ln r` once for each redshift.
+        The high-k end is smoothed with a Gaussian damping at the maximum k of
+        the tables, which suppresses the ringing of the sharp cut. Accurate for
+        :math:`r \gtrsim 10/k_{\max}`, as needed by the 2-halo term with halo
+        exclusion (only :math:`r > R_\Delta` is used).
+
+        Parameters
+        ----------
+        r: np.ndarray
+            Comoving separation (units : Mpc / h).
+        z: np.ndarray
+            Redshift.
+        n_k: int, optional
+            Number of points of the k grid.
+        r_min, r_max: float, optional
+            Range of the table in r (units : Mpc / h); outside it the correlation
+            function is extrapolated linearly in ln r.
+        n_r: int, optional
+            Number of points of the table in r.
+
+        Returns
+        -------
+        xi: np.ndarray
+            Correlation function, shape (z.size, r.size).
+        """
+        z = np.atleast_1d(z)
+        r = np.atleast_1d(r)
+        out = np.empty((z.size, r.size))
+        missing = [zz for zz in np.unique(z) if float(zz) not in self._xi_nl_tables]
+        if missing:
+            lnk = np.linspace(np.log(self.k.min()), np.log(self.k.max()), n_k)
+            k = np.exp(lnk)
+            r_tab = np.geomspace(r_min, r_max, n_r)
+            damping = np.exp(-((k / (0.5 * self.k.max())) ** 2))
+            weights = np.full(n_k, lnk[1] - lnk[0])
+            weights[[0, -1]] *= 0.5
+            pk = np.atleast_2d(self.matter_power_spectrum_cb_nl(np.asarray(missing), k))
+            kr = r_tab[:, np.newaxis] * k[np.newaxis, :]
+            # j0(kr) weighted by the integration measure: (r, k)
+            kernel = np.sinc(kr / np.pi) * (weights * damping * k**3 / (2.0 * np.pi**2))[np.newaxis, :]
+            for zz, pk_z in zip(missing, pk):
+                self._xi_nl_tables[float(zz)] = interpolate.InterpolatedUnivariateSpline(
+                    np.log(r_tab), kernel @ pk_z, k=3
+                )
+        for i, zz in enumerate(z):
+            out[i] = self._xi_nl_tables[float(zz)](np.log(r))
+        return out

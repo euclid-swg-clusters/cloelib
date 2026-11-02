@@ -23,6 +23,7 @@ class HaloProfileCore:
         sigma_nz: np.ndarray = None,
         alpha_nz: np.ndarray = None,
         z_mean_tomo_bin: np.ndarray = None,
+        exclusion_background=1.0,
     ):
         r"""Auxiliary class computing quantities used in mass profile models.
 
@@ -41,8 +42,16 @@ class HaloProfileCore:
         z_mean_tomo_bin : np.ndarray
             Mean z_obs boundary per tomographic bin, shape (Number of tomographic source redshift bins,),
             used to select which tomo bin a given mean_z_obs_bin falls into.
+        exclusion_background : float or callable, optional
+            Fraction of the mean matter density excluded inside the exclusion radius
+            by the 2-halo term with halo exclusion (`two_halo="sum_exclusion"`),
+            a number or a function of the redshift. Default 1 (all the matter);
+            e.g. for a mock where only the halos above a minimum mass are painted,
+            the mass fraction in those halos.
         """
         self.matter_statistics = matter_statistics
+        self.exclusion_background = exclusion_background
+        self._exclusion_cache = {}
         self.overdensity_type = overdensity_type
         self.overdensity = overdensity
         self.zs_max = zs_max
@@ -364,6 +373,7 @@ class HaloProfileCore:
         halo_bias,
         radius_units="Mpc/h",
         sigma_off=None,
+        R_exc=None,
     ):
         r"""
         Include the contribution of the cosmological 2-halo term.
@@ -377,6 +387,9 @@ class HaloProfileCore:
         inclusion_type : str
             If "sum", the 1-halo and 2-halo profile are summed.
             If "max", the maximum between them is considered at each point.
+            If "sum_exclusion", the 1-halo and the 2-halo profile with nonlinear
+            power spectrum and halo exclusion inside R_exc are summed
+            (see `two_halo_exclusion`).
         R: np.ndarray
             Radial points (units : Mpc / h)
         z: np.ndarray
@@ -391,6 +404,9 @@ class HaloProfileCore:
             If given, the miscentered 2-halo term is computed with the exact
             average over the miscentering distribution (see
             `_miscentered_2h_conv`), otherwise the centered one is used.
+        R_exc: np.ndarray, optional
+            Exclusion radius (units : Mpc / h), with shape (z.size, M.size).
+            Required by inclusion_type="sum_exclusion".
 
         Returns
         -------
@@ -398,6 +414,10 @@ class HaloProfileCore:
             Total surface mass density profile (units : h * Msun / pc**2).
             Shape: (z.size, M.size, R.size).
         """
+        if inclusion_type == "sum_exclusion":
+            return Sigma_1h + self.two_halo_exclusion(
+                R, z, R_exc, halo_bias, sigma_off=sigma_off, excess=False, radius_units=radius_units
+            )
         if sigma_off is None:
             func_2h = self.matter_statistics.surface_mass_density_2h
         else:
@@ -426,6 +446,7 @@ class HaloProfileCore:
         halo_bias,
         radius_units="Mpc/h",
         sigma_off=None,
+        R_exc=None,
     ):
         r"""
         Include the contribution of the cosmological 2-halo term.
@@ -439,6 +460,9 @@ class HaloProfileCore:
         inclusion_type : str
             If "sum", the 1-halo and 2-halo profile are summed.
             If "max", the maximum between them is considered at each point.
+            If "sum_exclusion", the 1-halo and the 2-halo profile with nonlinear
+            power spectrum and halo exclusion inside R_exc are summed
+            (see `two_halo_exclusion`).
         R: np.ndarray
             Radial points (units : Mpc / h)
         z: np.ndarray
@@ -453,6 +477,9 @@ class HaloProfileCore:
             If given, the miscentered 2-halo term is computed with the exact
             average over the miscentering distribution (see
             `_miscentered_2h_conv`), otherwise the centered one is used.
+        R_exc: np.ndarray, optional
+            Exclusion radius (units : Mpc / h), with shape (z.size, M.size).
+            Required by inclusion_type="sum_exclusion".
 
         Returns
         -------
@@ -460,6 +487,10 @@ class HaloProfileCore:
             Total excess surface mass density profile (units : h * Msun / pc**2).
             Shape: (z.size, M.size, R.size).
         """
+        if inclusion_type == "sum_exclusion":
+            return DeltaSigma_1h + self.two_halo_exclusion(
+                R, z, R_exc, halo_bias, sigma_off=sigma_off, excess=True, radius_units=radius_units
+            )
         if sigma_off is None:
             func_2h = self.matter_statistics.excess_surface_mass_density_2h
         else:
@@ -554,20 +585,7 @@ class HaloProfileCore:
         R_grid = np.exp(np.arange(np.log(R_min), np.log(R_max) + dlnR, dlnR))
         Sigma = self.matter_statistics.surface_mass_density_2h(R_grid, z, "Mpc/h")
 
-        # Rice kernel for R < R_id, with the integration weights (dR' = R' dlnR')
-        # i0e(t) = exp(-t) I0(t): exp[-(x^2+y^2)/2s^2] I0(xy/s^2) = exp[-(x-y)^2/2s^2] i0e(xy/s^2)
-        inner = R_grid < R_id
-        x, y = R_grid[inner, np.newaxis], R_grid[np.newaxis, :]
-        kernel = (
-            y**2.0
-            / sigma_off**2.0
-            * np.exp(-0.5 * (x - y) ** 2.0 / sigma_off**2.0)
-            * i0e(x * y / sigma_off**2.0)
-        )
-        weights = np.full(R_grid.size, dlnR)
-        weights[[0, -1]] *= 0.5
-        kernel *= weights[np.newaxis, :]
-        kernel /= kernel.sum(axis=1)[:, np.newaxis]  # int K dR' = 1
+        inner, kernel = self._rice_kernel(R_grid, sigma_off, R_id, dlnR)
 
         Sigma_off = Sigma.copy()
         Sigma_off[:, inner] = Sigma @ kernel.T
@@ -587,6 +605,231 @@ class HaloProfileCore:
         return np.array(
             [
                 np.interp(np.log(R_mpc[i]), np.log(R_grid), profile_grid[i])
+                for i in range(z.size)
+            ]
+        )
+
+    @staticmethod
+    def _rice_kernel(R_grid, sigma_off, R_id, dlnR):
+        r"""
+        Rice kernel of the Rayleigh miscentering for the radii R_grid < R_id.
+
+        Parameters
+        ----------
+        R_grid: np.ndarray
+            Logarithmic radial grid (units : Mpc / h), with spacing dlnR.
+        sigma_off: float
+            Scale of the Rayleigh miscentering distribution (units : Mpc / h).
+        R_id: float
+            The kernel is computed for R_grid < R_id.
+        dlnR: float
+            Logarithmic spacing of R_grid.
+
+        Returns
+        -------
+        inner: np.ndarray
+            Mask of the radii R_grid < R_id.
+        kernel: np.ndarray
+            Kernel with the integration weights (dR' = R' dlnR'), normalized to
+            unit integral, shape (inner.sum(), R_grid.size).
+        """
+        # i0e(t) = exp(-t) I0(t): exp[-(x^2+y^2)/2s^2] I0(xy/s^2) = exp[-(x-y)^2/2s^2] i0e(xy/s^2)
+        inner = R_grid < R_id
+        x, y = R_grid[inner, np.newaxis], R_grid[np.newaxis, :]
+        kernel = (
+            y**2.0
+            / sigma_off**2.0
+            * np.exp(-0.5 * (x - y) ** 2.0 / sigma_off**2.0)
+            * i0e(x * y / sigma_off**2.0)
+        )
+        weights = np.full(R_grid.size, dlnR)
+        weights[[0, -1]] *= 0.5
+        kernel *= weights[np.newaxis, :]
+        kernel /= kernel.sum(axis=1)[:, np.newaxis]  # int K dR' = 1
+        return inner, kernel
+
+    def _exclusion_background_fraction(self, z):
+        """Fraction of the mean density excluded by the 2-halo term with exclusion, shape (z.size,)"""
+        if callable(self.exclusion_background):
+            return np.broadcast_to(np.asarray(self.exclusion_background(z), dtype=float), z.shape)
+        return np.full(z.shape, float(self.exclusion_background))
+
+    def _two_halo_exclusion_grid(self, z, R_exc, halo_bias, R_grid, n_t=200, t_max=50.0):
+        r"""
+        Centered 2-halo surface density with halo exclusion on a radial grid.
+
+        See `two_halo_exclusion`. The result is cached, so that the surface and
+        excess surface densities, and the miscentered populations, share it.
+
+        Parameters
+        ----------
+        z: np.ndarray
+            Redshift, shape (z.size,).
+        R_exc: np.ndarray
+            Exclusion radius (units : Mpc / h), shape (z.size, M.size).
+        halo_bias: np.ndarray
+            Halo bias, shape (z.size, M.size).
+        R_grid: np.ndarray
+            Radial grid (units : Mpc / h).
+        n_t: int, optional
+            Number of points of the integral along the line of sight.
+        t_max: float, optional
+            Maximum of the integral along the line of sight, in units of R_exc.
+
+        Returns
+        -------
+        Sigma: np.ndarray
+            Surface density (units : h * Msun / pc**2), shape (z.size, M.size, R_grid.size).
+        """
+        key = (z.tobytes(), R_exc.tobytes(), halo_bias.tobytes(), R_grid[0], R_grid[-1], R_grid.size)
+        if key in self._exclusion_cache:
+            return self._exclusion_cache[key]
+
+        ms = self.matter_statistics
+        # unbiased 2-halo surface density with the nonlinear power spectrum, (z.size, N)
+        Sigma_nl = ms.surface_mass_density_2h(R_grid, z, "Mpc/h", nonlinear=True)
+        rho_m = (
+            self.background.Omega_m(z) * derived_cosmology.rho_crit(self.background, z) / self.background.h**2
+        )  # h^2 Msun / Mpc^3
+        f_bg = self._exclusion_background_fraction(z)
+        # line-of-sight distance from the exclusion sphere, in units of R_exc (t = 0 included)
+        u = np.concatenate([[0.0], np.geomspace(1.0e-4, t_max, n_t)])
+        Sigma = np.empty((z.size,) + R_exc.shape[1:] + (R_grid.size,))
+        for i in range(z.size):
+            b, r_exc = halo_bias[i], R_exc[i]
+            Sigma_nl_exc = np.interp(np.log(r_exc), np.log(R_grid), Sigma_nl[i])  # (M,)
+            t = r_exc[:, np.newaxis] * u[np.newaxis, :]  # (M, U)
+            # comoving separation for the comoving correlation function
+            r_com = (1.0 + z[i]) * np.sqrt(r_exc[:, np.newaxis] ** 2 + t**2)
+            xi = ms.correlation_function_cb_nl(r_com.ravel(), z[i : i + 1])[0].reshape(r_com.shape)
+            inner = R_grid < r_exc.max()
+            pi_e2 = np.clip(r_exc[:, np.newaxis] ** 2 - R_grid[np.newaxis, inner] ** 2, 0.0, None)  # (M, N_in)
+            # D(R) = int_0^inf xi(sqrt(R_exc^2 + t^2)) [t / sqrt(t^2 + pi_e^2) - 1] dt
+            # (t = pi_e = 0 only outside the exclusion radius, where D is not used)
+            norm = np.sqrt(t[:, np.newaxis, :] ** 2 + pi_e2[:, :, np.newaxis])
+            weight = t[:, np.newaxis, :] / np.maximum(norm, 1.0e-30) - 1.0
+            D = np.trapezoid(xi[:, np.newaxis, :] * weight, t[:, np.newaxis, :], axis=-1)  # (M, N_in)
+            # inside R_exc: b Sigma_NL(R_exc) + 2 rho_m [b D(R) - f_bg pi_e]
+            Sigma_in = b[:, np.newaxis] * Sigma_nl_exc[:, np.newaxis] + 2.0e-12 * rho_m[i] * (
+                b[:, np.newaxis] * D - f_bg[i] * np.sqrt(pi_e2)
+            )
+            Sigma_i = b[:, np.newaxis] * Sigma_nl[i][np.newaxis, :]
+            excluded = R_grid[np.newaxis, inner] < r_exc[:, np.newaxis]
+            Sigma_i[:, inner] = np.where(excluded, Sigma_in, Sigma_i[:, inner])
+            Sigma[i] = Sigma_i
+
+        if len(self._exclusion_cache) > 64:
+            self._exclusion_cache.clear()
+        self._exclusion_cache[key] = Sigma
+        return Sigma
+
+    def two_halo_exclusion(
+        self,
+        R,
+        z,
+        R_exc,
+        halo_bias,
+        sigma_off=None,
+        excess=False,
+        radius_units="Mpc/h",
+        R_min=1.0e-3,
+        R_max=30.0,
+        dlnR=0.02,
+        n_sigma_id=25.0,
+    ):
+        r"""
+        2-halo term with nonlinear power spectrum and halo exclusion.
+
+        The matter around a halo is distributed as :math:`\bar\rho_m [1 + b\,
+        \xi_{\rm NL}(r)]` outside the exclusion radius :math:`R_{\rm exc}` (e.g.
+        :math:`R_\Delta`) and is absent inside it (hard exclusion), where also a
+        fraction `exclusion_background` of the mean density is removed. The
+        projected excess density is, for :math:`R < R_{\rm exc}`,
+
+        .. math::
+
+            \Sigma_{\rm 2h}(R) = 2\bar\rho_m \left[b \int_{\pi_e}^\infty
+            \xi_{\rm NL}\left(\sqrt{R^2 + \pi^2}\right) d\pi - f_{\rm bg}\,\pi_e
+            \right], \qquad \pi_e = \sqrt{R_{\rm exc}^2 - R^2},
+
+        computed as :math:`b\,\Sigma_{\rm NL}(R_{\rm exc}) + 2\bar\rho_m [b\,
+        D(R) - f_{\rm bg}\pi_e]` with :math:`D(R) = \int_0^\infty
+        \xi_{\rm NL}(\sqrt{R_{\rm exc}^2 + t^2})\,[t/\sqrt{t^2 + \pi_e^2} - 1]\,dt`,
+        which needs the correlation function only outside the exclusion radius
+        (the small scales cancel). For :math:`R \ge R_{\rm exc}`,
+        :math:`\Sigma_{\rm 2h} = b\,\Sigma_{\rm NL}(R)`, the projection of the
+        nonlinear power spectrum. The excess surface density and the miscentering
+        (exact average over a Rayleigh distribution, as in `_miscentered_2h_conv`)
+        are computed on a logarithmic radial grid.
+
+        Parameters
+        ----------
+        R: np.ndarray
+            Radial points (units : Mpc / h)
+        z: np.ndarray
+            Redshift.
+        R_exc: np.ndarray
+            Exclusion radius (units : Mpc / h), shape (z.size, M.size).
+        halo_bias: np.ndarray
+            Halo bias, shape (z.size, M.size).
+        sigma_off: float, optional
+            Scale of the Rayleigh miscentering distribution (units : Mpc / h);
+            centered profile if None.
+        excess: bool, optional
+            If True, return the excess surface density, otherwise the surface density.
+        radius_units: str
+            Unit for the input radius. Accepted values are:
+            "Mpc/h", "radians", "degrees", "arcmin", "arcsec".
+        R_min, R_max: float, optional
+            Range of the radial grid (units : Mpc / h); R_max is extended to the
+            largest R and to the miscentering kernel if needed.
+        dlnR: float, optional
+            Logarithmic spacing of the radial grid.
+        n_sigma_id: float, optional
+            The centered profile is used for R > n_sigma_id * sigma_off.
+
+        Returns
+        -------
+        profile: np.ndarray
+            2-halo surface or excess surface density (units : h * Msun / pc**2),
+            shape (z.size, M.size, R.size).
+        """
+        z = np.atleast_1d(z)
+        if R_exc is None or halo_bias is None:
+            raise ValueError("The 2-halo term with exclusion requires R_exc and halo_bias.")
+        R_exc = np.asarray(R_exc, dtype=float).reshape(z.size, -1)
+        halo_bias = np.asarray(halo_bias, dtype=float).reshape(R_exc.shape)
+
+        # radius in Mpc/h with shape (z.size, R.size)
+        if radius_units.lower() != "mpc/h":
+            D_A = self.matter_statistics.angular_diameter_distance(z) * self.background.h  # Mpc / h
+            R_mpc = convert_distance(R, radius_units, "Mpc/h", D_A[:, np.newaxis])
+        else:
+            R_mpc = np.broadcast_to(np.atleast_1d(R), (z.size, np.size(R)))
+
+        R_max = max(R_max, R_mpc.max())
+        if sigma_off is not None:
+            R_id = n_sigma_id * sigma_off
+            R_max = max(R_max, R_id + 8.0 * sigma_off)
+        R_grid = np.exp(np.arange(np.log(R_min), np.log(R_max) + dlnR, dlnR))
+        profile_grid = self._two_halo_exclusion_grid(z, R_exc, halo_bias, R_grid)
+
+        if sigma_off is not None:
+            inner, kernel = self._rice_kernel(R_grid, sigma_off, R_id, dlnR)
+            profile_grid = profile_grid.copy()
+            profile_grid[..., inner] = profile_grid @ kernel.T
+
+        if excess:
+            # mean surface density within R (constant profile below R_min)
+            cumulative = (
+                cumulative_trapezoid(profile_grid * R_grid**2.0, np.log(R_grid), axis=-1, initial=0.0)
+                + 0.5 * profile_grid[..., :1] * R_min**2.0
+            )
+            profile_grid = 2.0 * cumulative / R_grid**2.0 - profile_grid
+
+        return np.array(
+            [
+                [np.interp(np.log(R_mpc[i]), np.log(R_grid), p) for p in profile_grid[i]]
                 for i in range(z.size)
             ]
         )
