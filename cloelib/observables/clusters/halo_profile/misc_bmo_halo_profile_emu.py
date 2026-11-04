@@ -389,7 +389,8 @@ class MiscBMOHaloProfileEmu:
         x_min, x_max : np.ndarray
             Normalisation bounds, shape (4,).
         R : np.ndarray
-            Projected radii (Mpc/h), shape ``(R.size,)``.
+            Projected radii (Mpc/h), shape ``(R.size,)``, or ``(z.size, R.size)``
+            for radii depending on z (angular units).
         R_vir : np.ndarray
             Virial radii (Mpc/h), shape ``(z.size, M.size)``.
         c : float
@@ -405,15 +406,15 @@ class MiscBMOHaloProfileEmu:
             Predicted profile (h Msun/pc²), shape ``(z.size, M.size, R.size)``.
         """
         Nz, NM = R_vir.shape
-        NR = R.size
+        NR = np.shape(R)[-1]
 
         # Build feature array: (Nz * NM * NR, 4)
-        log10_R = np.log10(R)  # (NR,)
+        log10_R = np.log10(np.atleast_2d(R))  # (1 or Nz, NR)
         log10_Rvir = np.log10(R_vir)  # (Nz, NM)
 
         # Broadcast to (Nz, NM, NR)
         log10_R_grid = np.broadcast_to(
-            log10_R[np.newaxis, np.newaxis, :], (Nz, NM, NR)
+            log10_R[:, np.newaxis, :], (Nz, NM, NR)
         ).reshape(-1)
         log10_Rvir_grid = np.broadcast_to(
             log10_Rvir[:, :, np.newaxis], (Nz, NM, NR)
@@ -492,7 +493,7 @@ class MiscBMOHaloProfileEmu:
             self._emu_sigma,
             self._sigma_min,
             self._sigma_max,
-            R_mpc[0, 0, :],  # R grid is the same for all (z, M)
+            R_mpc[:, 0, :],  # (1, R.size), or (z.size, R.size) for angular units
             R_vir,
             c,
             sigma_off,
@@ -569,7 +570,7 @@ class MiscBMOHaloProfileEmu:
             self._emu_delta_sigma,
             self._dsigma_min,
             self._dsigma_max,
-            R_mpc[0, 0, :],
+            R_mpc[:, 0, :],
             R_vir,
             c,
             sigma_off,
