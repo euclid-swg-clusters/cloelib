@@ -47,12 +47,13 @@ class ClusterWeakLensing:
             Halo weak lensing radial profile object
         halo_concentration : float or callable
             Halo concentration, or a concentration-mass relation ``c(z, M)`` returning
-            an array of shape (z.size, M.size) (supported by ``BMOHaloProfile`` and
-            ``MiscBMOHaloProfileEmu``).
+            an array of shape (z.size, M.size) (supported by ``BMOHaloProfile``,
+            ``MiscBMOHaloProfile`` and ``MiscBMOHaloProfileEmu``).
         selection_function : SelectionFunction
             Selection function object
         miscentered_profile : Profile, optional
-            Profile of the miscentered clusters (e.g. ``MiscBMOHaloProfileEmu``), whose
+            Profile of the miscentered clusters (``MiscBMOHaloProfile``, numerical, or
+            ``MiscBMOHaloProfileEmu``, emulator), whose
             ``excess_surface_mass_density`` takes the miscentering scale ``sigma_off``
             after the concentration. Required to use ``miscentering_params`` in
             ``get_DeltaSigma`` and ``get_gt``.

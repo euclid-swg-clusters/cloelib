@@ -9,6 +9,7 @@ from cloelib.cosmology.camb_cosmology import CAMBBackground, CAMBLinearPerturbat
 from cloelib.observables.clusters.halo_abundance import CastroHaloAbundance
 from cloelib.observables.clusters.halo_profile import (
     BMOHaloProfile,
+    MiscBMOHaloProfile,
     MiscBMOHaloProfileEmu,
     NFWHaloProfile,
 )
@@ -229,10 +230,11 @@ def test_profiles():
     _test_profile(profile_bmo, _reference_vals)
 
 
-def test_misc_bmo_profile():
+@pytest.mark.parametrize("profile_class", [MiscBMOHaloProfileEmu, MiscBMOHaloProfile])
+def test_misc_bmo_profile(profile_class):
 
-    # Miscentered BMO profile (emulator) with miscentered 2-halo term
-    print("# Miscentered BMO profile")
+    # Miscentered BMO profile (emulator or numerical) with miscentered 2-halo term
+    print("# Miscentered BMO profile (%s)" % profile_class.__name__)
 
     R_test = np.array([0.1, 0.3, 1.0, 3.0])  # Mpc/h, below and above sigma_off
     z_test = np.linspace(0.01, 0.5, 4)
@@ -248,12 +250,12 @@ def test_misc_bmo_profile():
     )
     # k up to 100 h/Mpc: the default k range (k < 10 h/Mpc) is not enough to
     # converge the 2-halo excess surface density at R < 1 Mpc/h
-    profile = MiscBMOHaloProfileEmu(
+    profile = profile_class(
         _get_matter_statistics(k=np.geomspace(1e-4, 100.0, 1000)), **_prof_kwargs
     )
 
     # Reference values from the notebook
-    # "Check Miscentering model for Sigma and DeltaSigma.ipynb".
+    # "Check Miscentering model for Sigma and DeltaSigma.ipynb" (1-halo: emulator).
     # Shape (z_test.size, R_test.size), units h * Msun / pc**2.
     # The 2-halo values refer to the semi-approximated functions
     # (*_2h_off_semiapprox); the 2-halo term included in the profile uses the exact
@@ -298,6 +300,30 @@ def test_misc_bmo_profile():
             "rtol": 3e-3,
         },
     }
+
+    if profile_class is MiscBMOHaloProfile:
+        # the reference values of the 1-halo term above are the emulator outputs; for the
+        # numerical profile, brute-force average over the offsets and the angles
+        # (Rayleigh offsets up to 10 sigma_off, 2000 x 400 points)
+        _reference_vals["surface_mass_density_1h"] = {
+            "desired": [
+                [431.405463, 295.527607, 52.612983, 3.546122],
+                [480.148749, 324.209863, 53.480648, 3.142945],
+                [531.200480, 353.573375, 53.965613, 2.750463],
+                [583.384234, 382.911211, 54.071096, 2.384888],
+            ],
+            "rtol": 1e-3,
+        }
+        _reference_vals["excess_surface_mass_density_1h"] = {
+            "desired": [
+                [11.570131, 70.902438, 83.372876, 22.922412],
+                [13.338055, 81.271438, 91.955416, 23.962314],
+                [15.260834, 92.462773, 100.720619, 24.898397],
+                [17.298155, 104.232208, 109.447242, 25.714994],
+            ],
+            # 5e-3 at R = sigma_off / 2, where DeltaSigma is small
+            "rtol": 6e-3,
+        }
 
     Sigma_1h = profile.surface_mass_density(
         R_test, z_test, M_test, c_test, sigma_off_test
@@ -669,6 +695,7 @@ def test_lensing_miscentering():
     for prof, extra, rtol in [
         (BMOHaloProfile(matter_stat, trunc_fact=3.0, zs_max=2.0), (), 1e-10),
         (MiscBMOHaloProfileEmu(matter_stat, trunc_fact=3.0, zs_max=2.0), (sigma_off,), 1e-5),
+        (MiscBMOHaloProfile(matter_stat, trunc_fact=3.0, zs_max=2.0), (sigma_off,), 1e-10),
     ]:
         for func in (prof.surface_mass_density, prof.excess_surface_mass_density):
             out = func(R_test, z_test, M_test, c_test, *extra)
@@ -827,3 +854,68 @@ def test_lensing_miscentering():
         selection_function=selection_function,
     )
     assert_raises(ValueError, cluster_wl_cen.get_DeltaSigma, *args, miscentering_params=(0.7, sigma_off))
+
+
+def test_misc_bmo_profile_swap():
+
+    # the numerical miscentered profile can replace the emulator in ClusterWeakLensing
+    print("# Miscentered BMO profile: numerical vs emulator")
+    matter_stat = _get_matter_statistics(
+        z=np.linspace(0.01, 2.0, 100), k=np.geomspace(1e-4, 10.0, 500)
+    )
+    cluster_statistics_modeling = ClusterStatisticsModeling(
+        CastroHaloAbundance(matter_statistics=matter_stat),
+        integ_k_arr=np.geomspace(1.1e-4, 9.9, 400),
+        integ_mass_arr=np.logspace(13.5, 15.5, 41),
+        integ_lambda_true_arr=np.geomspace(5.0, 250.0, 51),
+        integ_ztrue_arr=np.linspace(0.2, 0.9, 15),
+        area=10313.0,
+    )
+    selection_function = GaussianSelectionFunction(
+        halo_mass_observable=LognormalPowerLawHaloMassObservable(
+            A_l=52.0, B_l=0.9, C_l=0.5, sig_A_l=0.2, sig_B_l=-0.05, sig_C_l=0.001
+        ),
+        sig_lambda_norm=0.9,
+        sig_lambda_z=0.1,
+        sig_lambda_exponent=0.4,
+        sig_z_z=0.025,
+        sig_z_lambda=5.0e-6,
+        lambda_tab_integ=[31, 31],
+        z_tab_integ=31,
+    )
+    args = (np.array([0.3, 0.5, 0.7]), np.array([20.0, 30.0, 60.0]), np.geomspace(0.3, 10.0, 6))
+    gt = {}
+    for profile_class in (MiscBMOHaloProfileEmu, MiscBMOHaloProfile):
+        cluster_wl = ClusterWeakLensing(
+            cluster_statistics_modeling,
+            BMOHaloProfile(matter_stat, two_halo="sum", trunc_fact=3.0, zs_max=2.0),
+            halo_concentration=lambda z, M: 7.85 * (M[np.newaxis, :] / 2.0e12) ** -0.081
+            * (1.0 + z[:, np.newaxis]) ** -0.71,
+            selection_function=selection_function,
+            miscentered_profile=profile_class(matter_stat, two_halo="sum", trunc_fact=3.0, zs_max=2.0),
+        )
+        gt[profile_class] = cluster_wl.get_gt(
+            *args, miscentering_params=((0.4, 0.1), (0.6, 0.3)), comoving_radii=True
+        )
+    # emulator accuracy ~1e-2
+    assert_allclose(gt[MiscBMOHaloProfile], gt[MiscBMOHaloProfileEmu], rtol=1e-2)
+
+
+@pytest.mark.parametrize("profile_class", [MiscBMOHaloProfileEmu, MiscBMOHaloProfile])
+def test_misc_bmo_profile_angular_radii(profile_class):
+
+    # angular radii correspond to physical radii depending on z
+    print("# Miscentered BMO profile with angular radii (%s)" % profile_class.__name__)
+    matter_stat = _get_matter_statistics()
+    profile = profile_class(matter_stat, trunc_fact=3.0, zs_max=2.0)
+    theta = np.geomspace(1.0, 20.0, 5)  # arcmin
+    z_test, M_test = np.array([0.3, 0.6]), np.array([1.0e14, 5.0e14])
+    D_A = matter_stat.angular_diameter_distance(z_test) * matter_stat.background.h
+    for func in (profile.surface_mass_density, profile.excess_surface_mass_density):
+        out = func(theta, z_test, M_test, 4.0, 0.15, radius_units="arcmin")
+        for i in range(z_test.size):
+            assert_allclose(
+                out[i],
+                func(np.radians(theta / 60.0) * D_A[i], z_test[i : i + 1], M_test, 4.0, 0.15)[0],
+                rtol=1e-5,
+            )
