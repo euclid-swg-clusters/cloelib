@@ -15,6 +15,11 @@ def _bessel_j2(x):
     return 2.0 / x * j1(x) - j0(x)
 
 
+# kernels of the tabulated projected 2-halo integrals and nonlinear correlation function, shared
+# by all the MatterStatistics instances with the same k range (they do not depend on the cosmology)
+_PROJECTED_2H_KERNELS = {}
+
+
 class MatterStatistics:
     def __init__(
         self,
@@ -24,6 +29,7 @@ class MatterStatistics:
         z=np.linspace(1.0e-5, 2.0 - 1.0e-5, 100),
         k=np.geomspace(1e-4, 10, 500),
         nonlinear_perturbations: Perturbations = None,
+        tabulate_2h: bool = True,
     ):
         r"""Auxiliary class computing quantities used in galaxy cluster models.
 
@@ -51,6 +57,11 @@ class MatterStatistics:
             spectrum (`matter_power_spectrum_cb`), used by the 2-halo term with
             halo exclusion (`two_halo="sum_exclusion"` of the halo profiles).
             It must share the background of `perturbations`.
+        tabulate_2h : bool, optional
+            If True (default), the k integral of the projected 2-halo profiles is
+            computed once per redshift on a fixed logarithmic k grid and tabulated in
+            comoving radius (see `_projected_2h_integral`), instead of an adaptive
+            integration at each call.
 
         Notes
         ----------
@@ -69,6 +80,9 @@ class MatterStatistics:
         self.da_interp = None
         # tables of the nonlinear correlation function, for each redshift
         self._xi_nl_tables = {}
+        # tables of the projected 2-halo integrals, for each (Bessel function, P(k), redshift)
+        self.tabulate_2h = tabulate_2h
+        self._projected_2h_tables = {}
 
         # set P(k) interpolation usage
         if interpolate_pk:
@@ -268,6 +282,13 @@ class MatterStatistics:
             # in this case, theta was missing z dimension
             theta = theta[np.newaxis, :]
 
+        if self.tabulate_2h:
+            # comoving radius, k (1 + z) D_A theta = k R_com
+            R_com = theta * z_plus_1 * D_A
+            integral = self._projected_2h_integral(R_com, z, bessel_function, nonlinear)
+            if integral is not None:
+                return 1.0e-12 * rho_m * integral / (2.0 * np.pi * z_plus_1)
+
         ## 2. Integrand function
         def integrand(kl):
             ll = kl * z_plus_1 * D_A
@@ -287,6 +308,97 @@ class MatterStatistics:
         )
 
         return profile
+
+    def _projected_2h_integral(
+        self, R_com, z, bessel_function, nonlinear, k_switch=1.0, n_k_log=1000, dk=0.01,
+        r_min=1.0e-4, r_max=100.0, n_r=500,
+    ):
+        r"""
+        Tabulated k integral of the projected 2-halo profiles.
+
+        .. math::
+
+            I(R, z) = \int_{k_{\min}}^{k_{\max}} dk\, k\, J(k R)\, P(k, z)
+
+        with :math:`J = J_0` (surface density) or :math:`J_2` (excess surface density),
+        over the range of the power spectrum tables (`self.k`), computed with the
+        trapezoidal rule and tabulated in :math:`\ln R` (cubic spline) once for each
+        redshift. The k grid is logarithmic below `k_switch` and linear above it, with
+        step `dk`, which samples the oscillations of the Bessel function at all k (the
+        integrand of the nonlinear power spectrum grows up to the maximum k).
+        The sharp cut at :math:`k_{\max}` gives a term oscillating in R with period
+        :math:`2\pi/k_{\max}`, :math:`\pm k_{\max} J_1(k_{\max} R) P(k_{\max}) / R` (+ for
+        :math:`J_0`, - for :math:`J_2`, from the integration by parts), which is added
+        analytically to the tabulated (smooth) remainder.
+        Relative accuracy ~1e-4 up to R = 30 Mpc/h (~5e-4 at 50 Mpc/h, ~1e-3 at 100 Mpc/h).
+
+        Parameters
+        ----------
+        R_com: np.ndarray
+            Comoving radius (units : Mpc / h), shape (z.size, R.size).
+        z: np.ndarray
+            Redshift.
+        bessel_function: function
+            j0 or _bessel_j2.
+        nonlinear: bool
+            If True, use the nonlinear power spectrum.
+        k_switch: float, optional
+            Wavenumber of the switch from logarithmic to linear k grid (units : h / Mpc).
+        n_k_log: int, optional
+            Number of points of the logarithmic k grid.
+        dk: float, optional
+            Step of the linear k grid (units : h / Mpc).
+        r_min, r_max: float, optional
+            Range of the table in comoving radius (units : Mpc / h). Outside it, the
+            adaptive integration is used.
+        n_r: int, optional
+            Number of points of the table.
+
+        Returns
+        -------
+        integral: np.ndarray or None
+            Shape (z.size, R.size), or None if some radius is outside the table.
+        """
+        z = np.atleast_1d(z)
+        R_com = np.broadcast_to(R_com, (z.size, np.shape(R_com)[-1]))
+        if R_com.min() < r_min or R_com.max() > r_max:
+            return None
+        k_min, k_max = float(self.k.min()), float(self.k.max())
+        key_kernel = (bessel_function.__name__, k_min, k_max, k_switch, n_k_log, dk, r_min, r_max, n_r)
+        if key_kernel not in _PROJECTED_2H_KERNELS:
+            k_switch = min(max(k_switch, k_min), k_max)
+            k = np.concatenate(
+                [np.geomspace(k_min, k_switch, n_k_log), np.arange(k_switch, k_max, dk)[1:], [k_max]]
+            )
+            weights = np.zeros(k.size)
+            weights[1:] += 0.5 * np.diff(k)
+            weights[:-1] += 0.5 * np.diff(k)
+            r_tab = np.geomspace(r_min, r_max, n_r)
+            # J(kR) k dk : (r, k)
+            kernel = bessel_function(r_tab[:, np.newaxis] * k[np.newaxis, :]) * (weights * k)[np.newaxis, :]
+            _PROJECTED_2H_KERNELS[key_kernel] = (k, r_tab, kernel)
+        k, r_tab, kernel = _PROJECTED_2H_KERNELS[key_kernel]
+        # boundary term of the cut at k_max: sign * k_max J_1(k_max R) / R (times P(k_max))
+        sign = {"j0": 1.0, "_bessel_j2": -1.0}.get(bessel_function.__name__, 0.0)
+
+        def boundary(r):
+            return sign * k_max * j1(k_max * r) / r
+
+        power_spectrum = self.matter_power_spectrum_cb_nl if nonlinear else self.matter_power_spectrum_cb
+        tables = self._projected_2h_tables
+        missing = [zz for zz in np.unique(z) if (key_kernel, nonlinear, float(zz)) not in tables]
+        if missing:
+            pk = np.atleast_2d(power_spectrum(np.asarray(missing), k))
+            for zz, pk_z in zip(missing, pk):
+                tables[(key_kernel, nonlinear, float(zz))] = (
+                    interpolate.CubicSpline(np.log(r_tab), kernel @ pk_z - pk_z[-1] * boundary(r_tab)),
+                    pk_z[-1],
+                )
+        out = np.empty(R_com.shape)
+        for i, zz in enumerate(z):
+            smooth, pk_max = tables[(key_kernel, nonlinear, float(zz))]
+            out[i] = smooth(np.log(R_com[i])) + pk_max * boundary(R_com[i])
+        return out
 
     def surface_mass_density_2h(self, R, z, radius_units="Mpc/h", nonlinear=False):
         r"""
@@ -385,16 +497,21 @@ class MatterStatistics:
         out = np.empty((z.size, r.size))
         missing = [zz for zz in np.unique(z) if float(zz) not in self._xi_nl_tables]
         if missing:
-            lnk = np.linspace(np.log(self.k.min()), np.log(self.k.max()), n_k)
-            k = np.exp(lnk)
-            r_tab = np.geomspace(r_min, r_max, n_r)
-            damping = np.exp(-((k / (0.5 * self.k.max())) ** 2))
-            weights = np.full(n_k, lnk[1] - lnk[0])
-            weights[[0, -1]] *= 0.5
+            # j0(kr) weighted by the integration measure: (r, k), shared by all the instances
+            # with the same k range (it does not depend on the cosmology)
+            key_kernel = ("xi", np.log(self.k.min()), np.log(self.k.max()), n_k, r_min, r_max, n_r)
+            if key_kernel not in _PROJECTED_2H_KERNELS:
+                lnk = np.linspace(np.log(self.k.min()), np.log(self.k.max()), n_k)
+                k = np.exp(lnk)
+                r_tab = np.geomspace(r_min, r_max, n_r)
+                damping = np.exp(-((k / (0.5 * self.k.max())) ** 2))
+                weights = np.full(n_k, lnk[1] - lnk[0])
+                weights[[0, -1]] *= 0.5
+                kr = r_tab[:, np.newaxis] * k[np.newaxis, :]
+                kernel = np.sinc(kr / np.pi) * (weights * damping * k**3 / (2.0 * np.pi**2))[np.newaxis, :]
+                _PROJECTED_2H_KERNELS[key_kernel] = (k, r_tab, kernel)
+            k, r_tab, kernel = _PROJECTED_2H_KERNELS[key_kernel]
             pk = np.atleast_2d(self.matter_power_spectrum_cb_nl(np.asarray(missing), k))
-            kr = r_tab[:, np.newaxis] * k[np.newaxis, :]
-            # j0(kr) weighted by the integration measure: (r, k)
-            kernel = np.sinc(kr / np.pi) * (weights * damping * k**3 / (2.0 * np.pi**2))[np.newaxis, :]
             for zz, pk_z in zip(missing, pk):
                 self._xi_nl_tables[float(zz)] = interpolate.InterpolatedUnivariateSpline(
                     np.log(r_tab), kernel @ pk_z, k=3

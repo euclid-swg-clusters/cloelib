@@ -2,9 +2,39 @@
 
 import numpy as np
 from astropy import units as ap_units
+from scipy.integrate import simpson
 from scipy.special import erf
 
 from cloelib.auxiliary import units
+
+_SIMPSON_WEIGHTS = {}
+
+
+def simpson_weights(x):
+    r"""Weights of the Simpson rule of `scipy.integrate.simpson` on the points `x`.
+
+    ``simpson(f, x=x, axis=i)`` is linear in f, so it equals the contraction of the
+    axis i of f with these weights, e.g. ``np.tensordot(f, simpson_weights(x), (i, 0))``,
+    which avoids the temporary arrays of products integrated over one axis.
+    The weights are cached for each grid.
+
+    Parameters
+    ----------
+    x : numpy.ndarray
+        Integration points, shape (n,).
+
+    Returns
+    -------
+    weights : numpy.ndarray
+        Shape (n,).
+    """
+    x = np.ascontiguousarray(x, dtype=float)
+    key = (x.size, x.tobytes())
+    if key not in _SIMPSON_WEIGHTS:
+        if len(_SIMPSON_WEIGHTS) > 256:
+            _SIMPSON_WEIGHTS.clear()
+        _SIMPSON_WEIGHTS[key] = simpson(np.eye(x.size), x=x, axis=-1)
+    return _SIMPSON_WEIGHTS[key]
 
 
 def convert_to_Delta_crit(overdensity_type, overdensity=200, background=None, z=0.0):

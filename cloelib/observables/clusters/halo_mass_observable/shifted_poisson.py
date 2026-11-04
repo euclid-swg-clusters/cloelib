@@ -197,7 +197,7 @@ class ShiftedPoissonHaloMassObservable:
         lsat = self._mean_richness(z, M) - 1.0
         s2 = self.scatter_richness(z, M) ** 2.0
         logpdf = _shifted_poisson_logpdf(lambda_true, lsat, s2)
-        return np.exp(logpdf, dtype="float128")
+        return np.exp(logpdf)
 
     def pdf_richness(self, z, M, lambda_true):
         r"""

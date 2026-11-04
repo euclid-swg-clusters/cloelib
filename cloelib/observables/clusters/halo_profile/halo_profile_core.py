@@ -52,6 +52,7 @@ class HaloProfileCore:
         self.matter_statistics = matter_statistics
         self.exclusion_background = exclusion_background
         self._exclusion_cache = {}
+        self._rice_cache = {}
         self.overdensity_type = overdensity_type
         self.overdensity = overdensity
         self.zs_max = zs_max
@@ -585,10 +586,10 @@ class HaloProfileCore:
         R_grid = np.exp(np.arange(np.log(R_min), np.log(R_max) + dlnR, dlnR))
         Sigma = self.matter_statistics.surface_mass_density_2h(R_grid, z, "Mpc/h")
 
-        inner, kernel = self._rice_kernel(R_grid, sigma_off, R_id, dlnR)
+        n_ker, inner, kernel = self._cached_rice_kernel(R_grid, sigma_off, R_id, dlnR)
 
         Sigma_off = Sigma.copy()
-        Sigma_off[:, inner] = Sigma @ kernel.T
+        Sigma_off[:, :n_ker][:, inner] = Sigma[:, :n_ker] @ kernel.T
 
         if excess:
             # mean surface density within R (constant profile below R_min)
@@ -608,6 +609,28 @@ class HaloProfileCore:
                 for i in range(z.size)
             ]
         )
+
+    def _cached_rice_kernel(self, R_grid, sigma_off, R_id, dlnR):
+        r"""
+        Rice kernel of `_rice_kernel` on the first `n_ker` points of R_grid, cached.
+
+        The kernel of the radii R < R_id only involves R' < R_id + 8 sigma_off, i.e. the
+        first `n_ker` points of the logarithmic grid, and it does not depend on z.
+
+        Returns
+        -------
+        n_ker: int
+            Number of points of R_grid used by the kernel.
+        inner, kernel: np.ndarray
+            Output of `_rice_kernel` on R_grid[:n_ker].
+        """
+        n_ker = int(np.searchsorted(R_grid, R_id + 8.0 * sigma_off, side="right"))
+        key = (float(sigma_off), float(R_id), float(R_grid[0]), float(dlnR), n_ker)
+        if key not in self._rice_cache:
+            if len(self._rice_cache) > 64:
+                self._rice_cache.clear()
+            self._rice_cache[key] = self._rice_kernel(R_grid[:n_ker], sigma_off, R_id, dlnR)
+        return (n_ker,) + self._rice_cache[key]
 
     @staticmethod
     def _rice_kernel(R_grid, sigma_off, R_id, dlnR):
@@ -654,7 +677,7 @@ class HaloProfileCore:
             return np.broadcast_to(np.asarray(self.exclusion_background(z), dtype=float), z.shape)
         return np.full(z.shape, float(self.exclusion_background))
 
-    def _two_halo_exclusion_grid(self, z, R_exc, halo_bias, R_grid, n_t=200, t_max=50.0):
+    def _two_halo_exclusion_grid(self, z, R_exc, halo_bias, R_grid, n_t=200, t_max=50.0, n_y=201):
         r"""
         Centered 2-halo surface density with halo exclusion on a radial grid.
 
@@ -675,6 +698,9 @@ class HaloProfileCore:
             Number of points of the integral along the line of sight.
         t_max: float, optional
             Maximum of the integral along the line of sight, in units of R_exc.
+        n_y: int, optional
+            Number of points of the table of the line-of-sight integral D in
+            y = pi_e / R_exc (linear interpolation).
 
         Returns
         -------
@@ -694,6 +720,16 @@ class HaloProfileCore:
         f_bg = self._exclusion_background_fraction(z)
         # line-of-sight distance from the exclusion sphere, in units of R_exc (t = 0 included)
         u = np.concatenate([[0.0], np.geomspace(1.0e-4, t_max, n_t)])
+        # trapezoidal weights in u (t = R_exc u)
+        w_u = np.zeros(u.size)
+        w_u[1:] += 0.5 * np.diff(u)
+        w_u[:-1] += 0.5 * np.diff(u)
+        # D(R) = R_exc int_0^inf xi(R_exc sqrt(1 + u^2)) [u / sqrt(u^2 + y^2) - 1] du only depends
+        # on y = pi_e / R_exc through the weight: kernel on a grid of y in [0, 1], (Y, U)
+        y_tab = np.linspace(0.0, 1.0, n_y)
+        norm = np.sqrt(u[np.newaxis, :] ** 2 + y_tab[:, np.newaxis] ** 2)
+        kernel_y = (u[np.newaxis, :] / np.maximum(norm, 1.0e-30) - 1.0) * w_u[np.newaxis, :]
+        kernel_y[0] = 0.0  # y = 0: R = R_exc
         Sigma = np.empty((z.size,) + R_exc.shape[1:] + (R_grid.size,))
         for i in range(z.size):
             b, r_exc = halo_bias[i], R_exc[i]
@@ -704,11 +740,13 @@ class HaloProfileCore:
             xi = ms.correlation_function_cb_nl(r_com.ravel(), z[i : i + 1])[0].reshape(r_com.shape)
             inner = R_grid < r_exc.max()
             pi_e2 = np.clip(r_exc[:, np.newaxis] ** 2 - R_grid[np.newaxis, inner] ** 2, 0.0, None)  # (M, N_in)
-            # D(R) = int_0^inf xi(sqrt(R_exc^2 + t^2)) [t / sqrt(t^2 + pi_e^2) - 1] dt
-            # (t = pi_e = 0 only outside the exclusion radius, where D is not used)
-            norm = np.sqrt(t[:, np.newaxis, :] ** 2 + pi_e2[:, :, np.newaxis])
-            weight = t[:, np.newaxis, :] / np.maximum(norm, 1.0e-30) - 1.0
-            D = np.trapezoid(xi[:, np.newaxis, :] * weight, t[:, np.newaxis, :], axis=-1)  # (M, N_in)
+            # D(R) = int_0^inf xi(sqrt(R_exc^2 + t^2)) [t / sqrt(t^2 + pi_e^2) - 1] dt, tabulated
+            # in y = pi_e / R_exc, (M, Y), and linearly interpolated (D is not used outside R_exc)
+            D_tab = (xi * r_exc[:, np.newaxis]) @ kernel_y.T
+            x = np.sqrt(pi_e2) / r_exc[:, np.newaxis] * (n_y - 1)
+            j = np.minimum(x.astype(int), n_y - 2)
+            frac = x - j
+            D = (1.0 - frac) * np.take_along_axis(D_tab, j, axis=1) + frac * np.take_along_axis(D_tab, j + 1, axis=1)
             # inside R_exc: b Sigma_NL(R_exc) + 2 rho_m [b D(R) - f_bg pi_e]
             Sigma_in = b[:, np.newaxis] * Sigma_nl_exc[:, np.newaxis] + 2.0e-12 * rho_m[i] * (
                 b[:, np.newaxis] * D - f_bg[i] * np.sqrt(pi_e2)
@@ -815,9 +853,9 @@ class HaloProfileCore:
         profile_grid = self._two_halo_exclusion_grid(z, R_exc, halo_bias, R_grid)
 
         if sigma_off is not None:
-            inner, kernel = self._rice_kernel(R_grid, sigma_off, R_id, dlnR)
+            n_ker, inner, kernel = self._cached_rice_kernel(R_grid, sigma_off, R_id, dlnR)
             profile_grid = profile_grid.copy()
-            profile_grid[..., inner] = profile_grid @ kernel.T
+            profile_grid[..., :n_ker][..., inner] = profile_grid[..., :n_ker] @ kernel.T
 
         if excess:
             # mean surface density within R (constant profile below R_min)

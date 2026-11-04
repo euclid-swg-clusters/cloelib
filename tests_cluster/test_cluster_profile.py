@@ -665,9 +665,10 @@ def test_lensing_miscentering():
     # profiles with a concentration for each (z, M)
     R_test, z_test, M_test = np.geomspace(0.3, 5.0, 4), np.array([0.3, 0.6]), np.array([1.0e14, 5.0e14])
     c_test = np.array([[4.0, 5.0], [3.0, 6.0]])
-    for prof, extra in [
-        (BMOHaloProfile(matter_stat, trunc_fact=3.0, zs_max=2.0), ()),
-        (MiscBMOHaloProfileEmu(matter_stat, trunc_fact=3.0, zs_max=2.0), (sigma_off,)),
+    # (the emulator is evaluated in single precision: rounding depends on the batch size)
+    for prof, extra, rtol in [
+        (BMOHaloProfile(matter_stat, trunc_fact=3.0, zs_max=2.0), (), 1e-10),
+        (MiscBMOHaloProfileEmu(matter_stat, trunc_fact=3.0, zs_max=2.0), (sigma_off,), 1e-5),
     ]:
         for func in (prof.surface_mass_density, prof.excess_surface_mass_density):
             out = func(R_test, z_test, M_test, c_test, *extra)
@@ -676,7 +677,7 @@ def test_lensing_miscentering():
                     assert_allclose(
                         out[i, j],
                         func(R_test, z_test[i : i + 1], M_test[j : j + 1], c_test[i, j], *extra)[0, 0],
-                        rtol=1e-10,
+                        rtol=rtol,
                     )
 
     print("    comoving radii")

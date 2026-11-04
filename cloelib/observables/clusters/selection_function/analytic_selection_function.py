@@ -2,6 +2,8 @@
 # import jax.numpy as np
 import numpy as np
 from scipy.integrate import simpson
+
+from cloelib.observables.clusters.auxiliary import simpson_weights
 import scipy.special as spc
 
 from cloelib.observables.clusters.halo_mass_observable import (
@@ -277,12 +279,16 @@ class AnalyticSelectionFunction:
         tau = self._tau_lambda_obs(z, lambda_true)
         f_prj = self._fprj_lambda_obs(z, lambda_true)
         erfc_arg1 = (mu + tau * sig2_l - lambda_obs) / np.sqrt(2 * sig2_l)
-        exptau = np.exp(
-            0.5 * tau * (2.0 * mu + tau * sig2_l - 2.0 * lambda_obs), dtype="float128"
+        exp_arg = 0.5 * tau * (2.0 * mu + tau * sig2_l - 2.0 * lambda_obs)
+        # exp(a) erfc(x) without overflow: for x > 0, erfc(x) = erfcx(x) exp(-x^2), with
+        # a - x^2 = -(lambda_obs - mu)^2 / (2 sigma^2)
+        positive = erfc_arg1 > 0.0
+        emg = np.exp(np.where(positive, exp_arg - erfc_arg1**2.0, exp_arg)) * np.where(
+            positive, spc.erfcx(erfc_arg1), spc.erfc(erfc_arg1)
         )
         pdf = (1.0 - f_prj) * self._gaussian(
             lambda_obs, mu, sig_pure
-        ) + exptau * spc.erfc(erfc_arg1) * (f_prj * tau / 2.0)
+        ) + emg * (f_prj * tau / 2.0)
         return pdf
 
     def scatter_z_obs(self, lambda_obs, z, lambda_true=None, z_pivot=0.2):
@@ -445,7 +451,7 @@ class AnalyticSelectionFunction:
         w_Dzob_Dlob__ztr_ltr = self.window_redshift_lambda_observed(
             z_obs_edges, lambda_obs_edges, z_true, lambda_true
         )
-        return simpson(w_Dzob_Dlob__ztr_ltr, x=lambda_true, axis=-1)
+        return w_Dzob_Dlob__ztr_ltr @ simpson_weights(lambda_true)
 
     def window_lambda_observed(self, lambda_obs_edges, z_true, lambda_true):
         r"""Compute the window function of each observed richness bin, given by:
@@ -502,7 +508,11 @@ class AnalyticSelectionFunction:
             # EMG correction: exp[-tau*(lob-mu) + 0.5*tau^2*sig^2] * Phi((lob-mu)/sig - tau*sig)
             exp_arg = -tau * (lob - mu) + 0.5 * tau**2.0 * sig2
             phi_arg = (lob - mu) / (np.sqrt(2.0) * sig) - tau * sig / np.sqrt(2.0)
-            exp_cdf = np.exp(exp_arg, dtype="float128") * 0.5 * (1.0 + spc.erf(phi_arg))
+            # exp(a) Phi = exp(a) erfc(-phi_arg) / 2 without overflow (see _prob_lambda_obs)
+            positive = phi_arg < 0.0
+            exp_cdf = 0.5 * np.exp(np.where(positive, exp_arg - phi_arg**2.0, exp_arg)) * np.where(
+                positive, spc.erfcx(-phi_arg), spc.erfc(-phi_arg)
+            )
 
             # mixture: (1 - f_prj) * gauss_cdf + f_prj * (gauss_cdf - exp_cdf)
             return gauss_cdf - f_prj * exp_cdf
@@ -648,11 +658,11 @@ class AnalyticSelectionFunction:
             _ltr = lambda_true[np.newaxis, np.newaxis, :]
             p_lob = self._prob_lambda_obs(_ztr, _ltr, _lob)
 
-            # integrand: (n_tab, z_obs_bins, z_true, lambda_true)
-            integrand = p_lob[:, np.newaxis, :, :] * w_zob_tab
-
-            # integrate over lambda_obs -> (z_obs_bins, z_true, lambda_true)
-            window[:, i_lob, :, :] = simpson(integrand, x=lob_tab, axis=0)
+            # integrate p_lob * w_zob_tab over lambda_obs (Simpson rule)
+            # -> (z_obs_bins, z_true, lambda_true)
+            window[:, i_lob, :, :] = np.einsum(
+                "tzl,tazl->azl", p_lob * simpson_weights(lob_tab)[:, np.newaxis, np.newaxis], w_zob_tab
+            )
 
         return window
 
@@ -739,15 +749,14 @@ class AnalyticSelectionFunction:
 
         # w_lob_zob: (z_obs_bins, lambda_obs_bins, z_true, lambda_true)
         # p_ltr:     (z_true, mass, lambda_true)
-        integrand_ltr = (
-            w_lob_zob[
-                :, :, :, np.newaxis, :
-            ]  # (z_obs_bins, lambda_obs_bin, z_true, 1, lambda_true)
-            * p_ltr[
-                np.newaxis, np.newaxis, :, :, :
-            ]  # (1, 1, z_true, mass, lambda_true)
+        # integrate over lambda_true (Simpson rule), as a matrix product for each z_true:
+        # (z_true, z_obs_bins * lambda_obs_bins, lambda_true) @ (z_true, lambda_true, mass)
+        n_zob, n_lob = w_lob_zob.shape[:2]
+        window = np.matmul(
+            w_lob_zob.transpose(2, 0, 1, 3).reshape(z_true.size, n_zob * n_lob, lambda_true.size),
+            (p_ltr * simpson_weights(lambda_true)).transpose(0, 2, 1),
         )
-        # integrate over lambda_true -> (z_obs_bins, z_true, mass)
-        window = simpson(integrand_ltr, x=lambda_true, axis=-1)
+        # -> (z_obs_bins, lambda_obs_bins, z_true, mass)
+        window = window.reshape(z_true.size, n_zob, n_lob, mass.size).transpose(1, 2, 0, 3)
 
         return window

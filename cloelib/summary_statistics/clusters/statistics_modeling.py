@@ -7,6 +7,7 @@ from cloelib.cosmology import derived_cosmology
 from cloelib.cosmology.cosmology import Perturbations
 from cloelib.observables.clusters.covariance import HaloCovariance
 from cloelib.observables.clusters.halo_abundance import HaloAbundance
+from cloelib.observables.clusters.auxiliary import simpson_weights
 
 # import jax
 
@@ -249,7 +250,7 @@ class ClusterStatisticsModeling:
             computation, somehow it is faster than using integrate_probe_function_in_k_space,
             to be investigated.
         """
-        return simpson(kernel, x=self.tabulated_integrands["k"])
+        return kernel @ simpson_weights(self.tabulated_integrands["k"])
 
     def integrate_probe_function_in_dk(self, kernel):
         """Integrate the kernel in k space with a k^2/2pi kernel.
@@ -377,29 +378,45 @@ class ClusterStatisticsModeling:
             with observed richness bins. Dimension (z_obs_bins, lambda_obs_bins, z_true),
             with (ztrue) from self.tabulated_integrands.
         """
-        # Add lambda_obs_edges dimension to probe_function
-        _probe_function = probe_function[np.newaxis,np.newaxis, ...]
-
-        # to make window_lambda_obs, hmf same shape as probe_function
-        extra_axes = tuple(range(4, 4 + len(_probe_function.shape[4:])))
-
-        # reshape HMF
-        _hmf = np.expand_dims(
-            self.tabulated_integrands["dn/dM(ztrue,M)"], axis=(0, 1, *extra_axes)
+        # integral of P(lambda_obs_bin_i,z_ob_bin_j|M, z)*dn/dM(M,z) over mass (Simpson rule),
+        # as a matrix product over mass for each z_true
+        # Dimension: (z_obs_bins, lambda_obs_bins, z_true, ...)
+        n_zob, n_lob, n_z, n_m = window_redshift_lambda_obs.shape[:4]
+        if any(n > 1 for n in window_redshift_lambda_obs.shape[4:]):
+            # window with extra dimensions: product integrated with the Simpson rule
+            _probe_function = probe_function[np.newaxis, np.newaxis, ...]
+            extra_axes = tuple(range(4, 4 + len(_probe_function.shape[4:])))
+            _hmf = np.expand_dims(
+                self.tabulated_integrands["dn/dM(ztrue,M)"], axis=(0, 1, *extra_axes)
+            )
+            return simpson(
+                _probe_function * _hmf * window_redshift_lambda_obs,
+                x=self.tabulated_integrands["M"],
+                axis=3,
+            )
+        extra_shape = np.broadcast_shapes(
+            np.shape(probe_function)[2:], window_redshift_lambda_obs.shape[4:]
         )
-        # print('MASS INTEGRAL_probe_function',_probe_function.shape,
-        #       '_hmf',_hmf.shape,
-        #       'window_redshift_lambda_obs',window_redshift_lambda_obs.shape,
-        #       '_probe_function * _hmf * window_redshift_lambda_obs',(_probe_function * _hmf * window_redshift_lambda_obs).shape,
-        #       'self.tabulated_integrands["M"]',self.tabulated_integrands["M"].shape)
-        # integral of P(lambda_obs_bin_i,z_ob_bin_j|M, z)*dn/dM(M,z) over mass
-        # Dimension: (z_obs_bins, lambda_obs_bins, z_true)
-        integrated_probe_function = simpson(
-            _probe_function * _hmf * window_redshift_lambda_obs,
-            x=self.tabulated_integrands["M"],
-            axis=3,
+        window_redshift_lambda_obs = window_redshift_lambda_obs.reshape(n_zob, n_lob, n_z, n_m)
+        # (ztrue, M, ...) kernel with the HMF and the integration weights
+        hmf_weights = self.tabulated_integrands["dn/dM(ztrue,M)"] * simpson_weights(
+            self.tabulated_integrands["M"]
         )
-        return integrated_probe_function
+        probe_function = np.asarray(probe_function)
+        probe_function = probe_function.reshape(
+            probe_function.shape + (1,) * (2 + len(extra_shape) - probe_function.ndim)
+        )
+        kernel = np.broadcast_to(
+            probe_function * np.expand_dims(hmf_weights, tuple(range(2, 2 + len(extra_shape)))),
+            (n_z, n_m) + extra_shape,
+        ).reshape(n_z, n_m, -1)
+        # (ztrue, z_obs * lambda_obs, M) @ (ztrue, M, ...) -> (ztrue, z_obs * lambda_obs, ...)
+        integrated_probe_function = np.matmul(
+            window_redshift_lambda_obs.transpose(2, 0, 1, 3).reshape(n_z, n_zob * n_lob, n_m), kernel
+        )
+        return np.moveaxis(
+            integrated_probe_function.reshape((n_z, n_zob, n_lob) + extra_shape), 0, 2
+        )
 
 
     def integrate_probe_function_in_redshift(self, probe_function):
@@ -432,10 +449,10 @@ class ClusterStatisticsModeling:
         # print("self.tabulated_integrands",self.tabulated_integrands["dv/dz(ztrue)"].shape)
         # print("_dvdz",_dvdz.shape)
         # output : (z_obs, lambda_obs_edges)
-        integrated_probe_function = simpson(
-            probe_function * _dvdz ,
-            x=self.tabulated_integrands["ztrue"],
-            axis=2,
+        integrated_probe_function = np.tensordot(
+            probe_function * _dvdz,
+            simpson_weights(self.tabulated_integrands["ztrue"]),
+            axes=(2, 0),
         )
         # print('integrated_probe_function',integrated_probe_function.shape)
         return integrated_probe_function
