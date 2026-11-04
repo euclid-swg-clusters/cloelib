@@ -2,7 +2,7 @@ import numpy as np
 
 from cloelib.observables.clusters.matter_statistics import MatterStatistics
 
-from .halo_profile_core import HaloProfileCore
+from .halo_profile_core import HaloProfileCore, _piecewise_unit
 
 
 class NFWHaloProfile:
@@ -51,7 +51,7 @@ class NFWHaloProfile:
 
         Parameters
         ----------
-        x : float
+        x : float or np.ndarray
             Dimensionless radial coordinates.
 
         Returns
@@ -64,12 +64,12 @@ class NFWHaloProfile:
         Implementation of second part of Eq. 4 from `Golse et al. 2002
         <https://ui.adsabs.harvard.edu/abs/2002A%26A...390..821G/abstract>`_.
         """
-        if x < 1.0:
-            return (1.0 - np.arccosh(1.0 / x) / np.sqrt(1.0 - x**2.0)) / (x**2.0 - 1.0)
-        if x == 1.0:
-            return 1.0 / 3.0
-        if x > 1.0:
-            return (1.0 - np.arccos(1.0 / x) / np.sqrt(x**2.0 - 1.0)) / (x**2.0 - 1.0)
+        return _piecewise_unit(
+            x,
+            lambda x: (1.0 - np.arccosh(1.0 / x) / np.sqrt(1.0 - x**2.0)) / (x**2.0 - 1.0),
+            1.0 / 3.0,
+            lambda x: (1.0 - np.arccos(1.0 / x) / np.sqrt(x**2.0 - 1.0)) / (x**2.0 - 1.0),
+        )
 
     def _g_term(self, x):
         r"""
@@ -79,7 +79,7 @@ class NFWHaloProfile:
 
         Parameters
         ----------
-        x: float
+        x: float or np.ndarray
             Dimensionless radial coordinates.
 
         Returns
@@ -92,12 +92,12 @@ class NFWHaloProfile:
         Implementation of Eq. 5 from `Golse et al. 2002
         <https://ui.adsabs.harvard.edu/abs/2002A%26A...390..821G/abstract>`_.
         """
-        if x < 1.0:
-            return np.log(x / 2.0) + np.arccosh(1.0 / x) / np.sqrt(1.0 - x**2.0)
-        if x == 1.0:
-            return 1.0 + np.log(1.0 / 2.0)
-        if x > 1.0:
-            return np.log(x / 2.0) + np.arccos(1.0 / x) / np.sqrt(x**2.0 - 1.0)
+        return _piecewise_unit(
+            x,
+            lambda x: np.log(x / 2.0) + np.arccosh(1.0 / x) / np.sqrt(1.0 - x**2.0),
+            1.0 + np.log(1.0 / 2.0),
+            lambda x: np.log(x / 2.0) + np.arccos(1.0 / x) / np.sqrt(x**2.0 - 1.0),
+        )
 
     def _surface_mass_density_1h(self, R, RDelta, Delta, c):
         r"""
@@ -125,7 +125,7 @@ class NFWHaloProfile:
         Rs = RDelta / c
         x = R / Rs
 
-        F = np.vectorize(self._f_term)(x)
+        F = self._f_term(x)
         m_nfw = np.log(1.0 + c) - c / (1.0 + c)  # Eq. 4 Oguri & Hamana 2011
         rho_s = Delta * c**3.0 / (3.0 * m_nfw)
 
@@ -160,7 +160,7 @@ class NFWHaloProfile:
         Rs = RDelta / c
         x = R / Rs
 
-        G = np.vectorize(self._g_term)(x)
+        G = self._g_term(x)
 
         m_nfw = np.log(1.0 + c) - c / (1.0 + c)  # Eq. 4 Oguri & Hamana 2011
         rho_s = Delta * c**3.0 / (3.0 * m_nfw)

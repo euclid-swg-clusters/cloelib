@@ -12,6 +12,19 @@ from cloelib.observables.clusters.auxiliary import (
 from cloelib.observables.clusters.matter_statistics import MatterStatistics
 
 
+def _piecewise_unit(x, below, at_one, above):
+    r"""
+    Evaluate a function of the dimensionless radius x defined separately for x < 1,
+    x = 1 and x > 1, element-wise on arrays (scalar in, scalar out).
+    """
+    x = np.asarray(x, dtype=float)
+    out = np.full(x.shape, at_one)
+    lo, hi = x < 1.0, x > 1.0
+    out[lo] = below(x[lo])
+    out[hi] = above(x[hi])
+    return out if out.ndim else float(out)
+
+
 class HaloProfileCore:
     def __init__(
         self,

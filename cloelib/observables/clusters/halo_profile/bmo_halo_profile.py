@@ -2,7 +2,7 @@ import numpy as np
 
 from cloelib.observables.clusters.matter_statistics import MatterStatistics
 
-from .halo_profile_core import HaloProfileCore
+from .halo_profile_core import HaloProfileCore, _piecewise_unit
 
 
 class BMOHaloProfile:
@@ -70,12 +70,12 @@ class BMOHaloProfile:
 
         Parameters
         ----------
-        x : float
+        x : float or np.ndarray
             Dimensionless radial coordinates.
 
         Returns
         -------
-        F_BMO : float
+        F_BMO : float or np.ndarray
             One-Halo BMO F term.
 
         Notes
@@ -83,12 +83,12 @@ class BMOHaloProfile:
         Implementation of Eq. A.5 from `Baltz et al. 2009
         <https://ui.adsabs.harvard.edu/abs/2009JCAP...01..015B/abstract>`_.
         """
-        if x < 1.0:
-            return np.arccosh(1.0 / x) / np.sqrt(1.0 - x**2.0)
-        if x == 1.0:
-            return 1.0
-        if x > 1.0:
-            return np.arccos(1.0 / x) / np.sqrt(x**2.0 - 1.0)
+        return _piecewise_unit(
+            x,
+            lambda x: np.arccosh(1.0 / x) / np.sqrt(1.0 - x**2.0),
+            1.0,
+            lambda x: np.arccos(1.0 / x) / np.sqrt(x**2.0 - 1.0),
+        )
 
     def _g_term(self, x):
         r"""
@@ -98,12 +98,12 @@ class BMOHaloProfile:
 
         Parameters
         ----------
-        x : float
+        x : float or np.ndarray
             Dimensionless radial coordinates.
 
         Returns
         -------
-        G_BMO : float
+        G_BMO : float or np.ndarray
             One-Halo BMO G term.
 
         Notes
@@ -111,12 +111,12 @@ class BMOHaloProfile:
         Implementation of Eq. A.28 from `Baltz et al. 2009
         <https://ui.adsabs.harvard.edu/abs/2009JCAP...01..015B/abstract>`_.
         """
-        if x < 1.0:
-            return (self._f_term(x) - 1.0) / (1.0 - x**2.0)
-        if x == 1.0:
-            return 1.0 / 3.0
-        if x > 1.0:
-            return (1.0 - self._f_term(x)) / (x**2.0 - 1.0)
+        return _piecewise_unit(
+            x,
+            lambda x: (self._f_term(x) - 1.0) / (1.0 - x**2.0),
+            1.0 / 3.0,
+            lambda x: (1.0 - self._f_term(x)) / (x**2.0 - 1.0),
+        )
 
     def _surface_mass_density_1h(self, R, RDelta, Delta, c):
         r"""
@@ -174,8 +174,8 @@ class BMOHaloProfile:
 
         const = rho_s_bmo * Rs
 
-        G = np.vectorize(self._g_term)(x)
-        F = np.vectorize(self._f_term)(x)
+        G = self._g_term(x)
+        F = self._f_term(x)
 
         term1 = tau**4.0 / (tau**2.0 + 1.0) ** 3.0
         term2 = 2.0 * (tau**2.0 + 1.0) * G
@@ -254,10 +254,10 @@ class BMOHaloProfile:
         const = 2.0 * np.pi * rho_s_bmo * Rs**3.0
         term1 = tau**4.0 / (tau**2.0 + 1.0) ** 3.0
 
-        F = np.vectorize(self._f_term)(x)
+        F = self._f_term(x)
         term2 = 2.0 * (tau**2.0 + 1.0 + 4.0 * (x**2.0 - 1.0)) * F
 
-        G = np.vectorize(self._g_term)(x)
+        G = self._g_term(x)
         term3 = (
             np.pi * (3.0 * tau**2.0 - 1.0) + 2.0 * tau * (tau**2.0 - 3.0) * np.log(tau)
         ) / tau
