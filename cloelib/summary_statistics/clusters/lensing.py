@@ -373,6 +373,7 @@ class ClusterWeakLensing:
         opt_sel_bias_pca=None,
         comoving_radii=False,
         cluster_contamination=None,
+        m_shear=None,
     ):
         r"""Compute reduced shear profile.
 
@@ -413,6 +414,12 @@ class ClusterWeakLensing:
             members, in the radial bins of ``radius_edges``. The profile is multiplied by
             :math:`1 - f_{\rm cl}(R, \Delta\lambda^{\rm ob}_i, \Delta z^{\rm ob}_j)`.
             It must be between 0 and 1, with dimension (z_obs_bins, lambda_obs_bins, radius).
+        m_shear : float, numpy.ndarray, None
+            If not None, multiplicative shear bias: the profile is multiplied by
+            :math:`1 + m`. It is a property of the source sample, so it does not depend
+            on richness or radius: a float (same for all the sources), or one value for each
+            source tomographic bin, with dimension (``profile.core.z_mean_tomo_bin.size``).
+            Each z_obs bin uses the value of its source bin (``_get_tomo_bin_index``).
 
         Returns
         -------
@@ -472,6 +479,19 @@ class ClusterWeakLensing:
             if np.any(f_cl < 0.0) or np.any(f_cl > 1.0):
                 raise ValueError("cluster_contamination must be between 0 and 1.")
             contamination_corr = 1.0 - f_cl
+        shear_corr = 1
+        if m_shear is not None:
+            m_shear = np.asarray(m_shear)
+            n_tomo = self.profile.core.z_mean_tomo_bin.size
+            if m_shear.ndim == 0:
+                shear_corr = 1.0 + m_shear
+            elif m_shear.shape == (n_tomo,):
+                idx = [self.profile.core._get_tomo_bin_index(z) for z in z_obs_mean]
+                shear_corr = 1.0 + m_shear[idx, np.newaxis, np.newaxis]
+            else:
+                raise ValueError(
+                    f"m_shear must be a float or have shape ({n_tomo},), one value per source tomographic bin, not {m_shear.shape}."
+                )
         return (
             self._get_profile(
                 z_obs_edges,
@@ -484,6 +504,7 @@ class ClusterWeakLensing:
             )
             * opt_sel_corr
             * contamination_corr
+            * shear_corr
         )
 
     @staticmethod

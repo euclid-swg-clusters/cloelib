@@ -857,6 +857,33 @@ def test_lensing_miscentering():
         rtol=1e-12,
     )
 
+    print("    multiplicative shear bias")
+    assert_allclose(
+        cluster_wl.get_gt(*args, miscentering_params=(0.7, sigma_off), m_shear=-0.02),
+        0.98 * gt_mix,
+        rtol=1e-12,
+    )
+    # one value per source tomographic bin: each z_obs bin uses the one of its sources
+    core = cluster_wl.profile.core
+    m_tomo = 0.01 * np.arange(1.0, core.z_mean_tomo_bin.size + 1.0)
+    idx_tomo = [core._get_tomo_bin_index(z) for z in 0.5 * (z_obs_edges[:-1] + z_obs_edges[1:])]
+    gt_m = cluster_wl.get_gt(*args, miscentering_params=(0.7, sigma_off), m_shear=m_tomo)
+    assert_allclose(
+        gt_m, gt_mix * (1.0 + m_tomo[idx_tomo])[:, np.newaxis, np.newaxis], rtol=1e-12
+    )
+    # together with the cluster contamination
+    assert_allclose(
+        cluster_wl.get_gt(
+            *args,
+            miscentering_params=(0.7, sigma_off),
+            cluster_contamination=f_cl,
+            m_shear=m_tomo,
+        ),
+        gt_m * (1.0 - f_cl),
+        rtol=1e-12,
+    )
+    assert_raises(ValueError, cluster_wl.get_gt, *args, m_shear=m_tomo[:-1])
+
     print("    errors")
     assert_raises(ValueError, cluster_wl.get_gt, *args, cluster_contamination=np.full(gt_mix.shape, 1.2))
     assert_raises(ValueError, cluster_wl.get_gt, *args, cluster_contamination=np.full(gt_mix.shape, -0.1))
