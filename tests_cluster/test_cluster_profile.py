@@ -834,7 +834,36 @@ def test_lensing_miscentering():
         rtol=1e-10,
     )
 
+    print("    cluster contamination")
+    # depends on redshift, richness and radial bin
+    f_cl = 0.2 * np.exp(-R_mean) * np.array([[1.0, 1.5], [0.5, 2.0]])[..., np.newaxis]
+    assert f_cl.shape == gt_mix.shape
+    assert_allclose(
+        cluster_wl.get_gt(
+            *args, miscentering_params=(0.7, sigma_off), cluster_contamination=f_cl
+        ),
+        gt_mix * (1.0 - f_cl),
+        rtol=1e-12,
+    )
+    # together with the optical selection bias correction
+    assert_allclose(
+        cluster_wl.get_gt(
+            *args,
+            opt_sel_bias_params=corr_pars,
+            miscentering_params=(0.7, sigma_off),
+            cluster_contamination=f_cl,
+        ),
+        gt_corr * (1.0 - f_cl),
+        rtol=1e-12,
+    )
+
     print("    errors")
+    assert_raises(ValueError, cluster_wl.get_gt, *args, cluster_contamination=np.full(gt_mix.shape, 1.2))
+    assert_raises(ValueError, cluster_wl.get_gt, *args, cluster_contamination=np.full(gt_mix.shape, -0.1))
+    # wrong shapes: only the full (z_obs, lambda_obs, radius) array is accepted
+    assert_raises(ValueError, cluster_wl.get_gt, *args, cluster_contamination=0.1)
+    assert_raises(ValueError, cluster_wl.get_gt, *args, cluster_contamination=f_cl[0, 0])
+    assert_raises(ValueError, cluster_wl.get_gt, *args, cluster_contamination=f_cl[..., 0])
     assert_raises(ValueError, cluster_wl.get_gt, *args, opt_sel_bias_params=corr_pars[:4])
     assert_raises(
         ValueError,

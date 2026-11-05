@@ -372,8 +372,9 @@ class ClusterWeakLensing:
         reduced_shear=True,
         opt_sel_bias_pca=None,
         comoving_radii=False,
+        cluster_contamination=None,
     ):
-        """Compute reduced shear profile.
+        r"""Compute reduced shear profile.
 
         Parameters
         ----------
@@ -407,6 +408,11 @@ class ClusterWeakLensing:
             It cannot be used together with ``opt_sel_bias_params``.
         comoving_radii : bool
             If True, ``radius_edges`` are comoving, see ``_get_profile``.
+        cluster_contamination : numpy.ndarray, None
+            If not None, contamination :math:`f_{\rm cl}` of the source sample by cluster
+            members, in the radial bins of ``radius_edges``. The profile is multiplied by
+            :math:`1 - f_{\rm cl}(R, \Delta\lambda^{\rm ob}_i, \Delta z^{\rm ob}_j)`.
+            It must be between 0 and 1, with dimension (z_obs_bins, lambda_obs_bins, radius).
 
         Returns
         -------
@@ -455,6 +461,17 @@ class ClusterWeakLensing:
             )
         if opt_sel_bias_pca is not None:
             opt_sel_corr = self.optical_selection_bias_pca_correction(*opt_sel_bias_pca)
+        contamination_corr = 1
+        if cluster_contamination is not None:
+            f_cl = np.asarray(cluster_contamination)
+            shape = (z_obs_edges_size, len(lambda_obs_edges) - 1, len(radius_edges) - 1)
+            if f_cl.shape != shape:
+                raise ValueError(
+                    f"cluster_contamination must have shape (z_obs, lambda_obs, radius) = {shape}, not {f_cl.shape}."
+                )
+            if np.any(f_cl < 0.0) or np.any(f_cl > 1.0):
+                raise ValueError("cluster_contamination must be between 0 and 1.")
+            contamination_corr = 1.0 - f_cl
         return (
             self._get_profile(
                 z_obs_edges,
@@ -466,6 +483,7 @@ class ClusterWeakLensing:
                 comoving_radii=comoving_radii,
             )
             * opt_sel_corr
+            * contamination_corr
         )
 
     @staticmethod
