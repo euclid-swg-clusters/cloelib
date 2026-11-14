@@ -18,9 +18,9 @@ from cloelib.observables.halos.selection_function import (
     NumericalSelectionFunction,
 )
 from cloelib.summary_statistics.clusters import (
-    Covariance,
     ClusterClustering,
     ClusterCounts,
+    ClusterCovariance,
     ClusterStatisticsModeling,
     ClusterWeakLensing,
 )
@@ -320,7 +320,7 @@ def get_values(
     )
     print(f"nc        :  {time.time() - t0:.4f} seconds")
     t0 = time.time()
-    cov_cluster_counts = Covariance(cluster_counts_statistics).compute(
+    cov_cluster_counts = ClusterCovariance(cluster_counts_statistics).compute(
         z_obs_edges=z_obs_nc_edges,
         prediction=cluster_counts,
         intermediates=counts_intermediate_integration_products,
@@ -343,7 +343,7 @@ def get_values(
     )
     print(f"xi        :  {time.time() - t0:.4f} seconds")
     t0 = time.time()
-    cov_cluster_clustering = Covariance(cluster_clustering_statistics).compute(
+    cov_cluster_clustering = ClusterCovariance(cluster_clustering_statistics).compute(
         intermediates=clustering_intermediate_integration_products,
     )
     print(f"xi_cov    :  {time.time() - t0:.4f} seconds")

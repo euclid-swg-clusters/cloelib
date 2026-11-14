@@ -11,8 +11,8 @@ from cloelib.observables.halos.halo_model_properties import HaloModelProperties
 from cloelib.observables.halos.selection_function import GaussianSelectionFunction
 from cloelib.summary_statistics.clusters import (
     ClusterCounts,
+    ClusterCovariance,
     ClusterStatisticsModeling,
-    Covariance,
 )
 
 
@@ -85,7 +85,7 @@ def test_count_covariance():
         integ_ztrue_arr=np.linspace(0.01, 1.99, 31),
         area=area,
     )
-    CC = Covariance(ClusterCounts(clusterstatmod), z_tab_integ=z_tab_integ)
+    CC = ClusterCovariance(ClusterCounts(clusterstatmod), z_tab_integ=z_tab_integ)
     # Exercise the unchanged internal survey-window kernel against reference values.
     CC.rint = np.zeros((nbins_z, len(k_test), CC.L + 1))
 

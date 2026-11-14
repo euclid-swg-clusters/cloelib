@@ -10,7 +10,7 @@ from .clustering import ClusterClustering
 from .lensing import ClusterWeakLensing
 
 
-class Covariance:
+class ClusterCovariance:
     """
     Compute the count or clustering-monopole covariance.
 
@@ -85,7 +85,7 @@ class Covariance:
         Given a configured counts model and its bin edges:
 
         >>> prediction, products = counts.get_NC(z_edges, richness_edges)
-        >>> covariance = Covariance(counts)
+        >>> covariance = ClusterCovariance(counts)
         >>> matrix = covariance.compute(
         ...     prediction=prediction, z_obs_edges=z_edges, intermediates=products
         ... )
@@ -93,7 +93,7 @@ class Covariance:
         For a configured clustering model:
 
         >>> xi, products = clustering.get_xi0(z_edges, richness_edges, radius_edges)
-        >>> matrix = Covariance(clustering).compute(intermediates=products)
+        >>> matrix = ClusterCovariance(clustering).compute(intermediates=products)
         """
         if isinstance(self.summary_statistic, ClusterCounts):
             if prediction is None or z_obs_edges is None:
