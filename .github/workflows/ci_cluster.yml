@@ -7,6 +7,10 @@ on:
       - cluster_structure
   pull_request:
 
+permissions:
+  contents: read
+  pull-requests: write
+
 env:
   ENV_NAME: cloe-org-env
   ENV_FILE: cloe-org-environments/environments/cloe-org-env-linux-v2026.1.yaml
@@ -54,7 +58,7 @@ jobs:
           mamba run -n $ENV_NAME python -m pip install ".[camb,classy,euclidemu2,baccoemu,emantis,react,hiclassy,astropy]"
           mamba run -n $ENV_NAME python -m pip install astropy
       - name: Run tests
-        run: mamba run -n $ENV_NAME python -m pytest tests_cluster/ --cov=cloelib/ --ignore=tests_cluster/benchmark_values.py
+        run: mamba run -n $ENV_NAME python -m pytest tests/test_cluster_* --cov=cloelib/ --ignore=tests/benchmark_values.py
         env:
           DISPLAY: test
 
@@ -72,7 +76,7 @@ jobs:
       - name: Get version from current branch
         id: current_version
         run: |
-          CURRENT_VERSION="$(grep -oP '__version__ = "\K[^"]+' cloelib/observables/clusters/__init__.py)"
+          CURRENT_VERSION="$(grep -oP '__version__ = "\K[^"]+' cloelib/observables/halos/__init__.py)"
           echo "CURRENT_VERSION=$CURRENT_VERSION" >> $GITHUB_ENV
           echo "my branch is ${{ github.ref }}"
           CLOE_ORG_SHA=$(git merge-base HEAD origin/main)
@@ -120,8 +124,8 @@ jobs:
       - name: Get version from cluster_structure branch
         id: cluster_structure_version
         run: |
-          if [[ "$(git show origin/cluster_structure:cloelib/observables/clusters/__init__.py)" == *"__version__"* ]]; then
-            MAIN_VERSION="$(grep -oP '__version__ = "\K[^"]+' cloelib/observables/clusters/__init__.py)"
+          if [[ "$(git show origin/cluster_structure:cloelib/observables/halos/__init__.py)" == *"__version__"* ]]; then
+            MAIN_VERSION="$(grep -oP '__version__ = "\K[^"]+' cloelib/observables/halos/__init__.py)"
           else
             echo "No version found at cluster_structure, assuming version 0.0.0"
             MAIN_VERSION="0.0.0"
@@ -139,7 +143,7 @@ jobs:
               ERROR="  - Version number should increase: $CURRENT_VERSION<$MAIN_VERSION"
             elif [ "$C1" != "$((M1 + 1))" ]; then
               ERROR="  - Increment should be done by 1: $GOAL"
-            elif [ "$CURRENT_VERSION" != "$GOAL" ]; then
+            elif [ "$CURRENT_VERSION" != "$GOAL" ] && [ "$MAIN_VERSION" != "0.0.0" ] ; then
               ERROR="  - When major version is increased, others should be zero: $GOAL"
             fi
           elif [ "$C2" != "$M2" ]; then
@@ -159,7 +163,7 @@ jobs:
               ERROR="  - Increments should be done by 1: $GOAL"
             fi
           else
-            ERROR="  - Version at cloelib/observables/clusters/__init__.py has not been updated!"
+            ERROR="  - Version at cloelib/observables/halos/__init__.py has not been updated!"
           fi
           echo "ERROR=$ERROR" >> $GITHUB_ENV
 
@@ -177,11 +181,12 @@ jobs:
         run: |
           # Use the GitHub API to update the PR title
           echo "Updating PR #$PR_NUMBER with new title: $NEW_TITLE"
-          curl -s -X PATCH \
-            -H "Authorization: token $GITHUB_TOKEN" \
-            -H "Accept: application/vnd.github.v3+json" \
-            -d "{\"title\":\"$NEW_TITLE\"}" \
-            "https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER" > /dev/null
+          curl --fail-with-body -X PATCH \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            -d "$(jq -n --arg title "$NEW_TITLE" '{title: $title}')" \
+            "https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER"
 
       - name: Check version update
         env:
