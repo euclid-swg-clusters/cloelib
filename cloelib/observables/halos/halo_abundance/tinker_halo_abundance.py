@@ -31,8 +31,8 @@ class TinkerHaloAbundance(HaloAbundanceBase):
         r"""
         Computation of the multiplicity function.
 
-        Computes the Tinker et al. (2008) multiplicity function
-        at the requested redshift and mass points. The parameters are
+        Computes the Tinker et al. (2008, arXiv:0803.2706) multiplicity function
+        at the requested redshift and mass value. The parameters are
         interpolated in the overdensity with respect to the mean density,
         calibrated for 200 <= Delta_m <= 3200 and z <~ 2.5. A ValueError is
         raised for Delta_m outside this range.
@@ -40,9 +40,9 @@ class TinkerHaloAbundance(HaloAbundanceBase):
         Parameters
         ----------
         z: numpy.ndarray
-            Redshift points.
+            Redshift values.
         M: numpy.ndarray
-            Mass points in h^{-1} Msun.
+            Mass values in h^{-1} Msun.
 
         Returns
         -------
@@ -63,7 +63,7 @@ class TinkerHaloAbundance(HaloAbundanceBase):
         # HMF computations
         ##################
 
-        # parameters (Table 2 of Tinker et al. 2008), as a function of the
+        # parameters (Table 2 of Tinker et al. 2008, arXiv:0803.2706), as a function of the
         # overdensity with respect to the mean density
         Delta_tab = np.array([200, 300, 400, 600, 800, 1200, 1600, 2400, 3200])
         A0_tab = np.array(
@@ -101,14 +101,14 @@ class TinkerHaloAbundance(HaloAbundanceBase):
         Computation of the halo bias.
 
         Computes the Tinker et al. (2010) halo bias
-        at the requested redshift and mass points.
+        at the requested redshift and mass values.
 
         Parameters
         ----------
         z: numpy.ndarray
-            Redshift points
+            Redshift values
         M: numpy.ndarray
-            Mass points in h^{-1} Msun
+            Mass values in h^{-1} Msun
 
         Returns
         -------
