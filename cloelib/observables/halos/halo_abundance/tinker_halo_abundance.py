@@ -38,6 +38,14 @@ class TinkerHaloAbundance(HaloAbundanceBase):
             "b0": np.array([2.57, 2.25, 2.05, 1.87, 1.59, 1.51, 1.46, 1.44, 1.41]),
             "c0": np.array([1.19, 1.27, 1.34, 1.45, 1.58, 1.80, 1.97, 2.24, 2.44]),
         }
+        self.tab_bias_parameters = {
+            "A": (1.0, 0.24),
+            "a": (0.44, 0.88),
+            "B": 0.183,
+            "b": 1.5,
+            "C": (0.019, 0.107, 0.19),
+            "c": 2.4,
+        }
 
     def f_sigma_nu(self, z, M):
         r"""
@@ -135,14 +143,16 @@ class TinkerHaloAbundance(HaloAbundanceBase):
         ###################
 
         # parameters
-        p = [1.0, 0.24, 0.44, 0.88, 0.183, 1.5, 0.019, 0.107, 0.19, 2.4]
         y = np.log10(Delta)
-        A_par = p[0] + p[1] * y * np.e ** (-((4.0 / y) ** 4))
-        a_par = p[2] * y - p[3]
-        B_par = p[4]
-        b_par = p[5]
-        C_par = p[6] + p[7] * y + p[8] * np.e ** (-((4.0 / y) ** 4))
-        c_par = p[9]
+
+        A_par = np.dot(
+            self.tab_bias_parameters["A"], (1, y * np.exp(-((4.0 / y) ** 4)))
+        )
+        a_par = np.dot(self.tab_bias_parameters["a"], (y, -1))
+        B_par = self.tab_bias_parameters["B"]
+        b_par = self.tab_bias_parameters["b"]
+        C_par = np.dot(self.tab_bias_parameters["C"], (1, y, np.exp(-((4.0 / y) ** 4))))
+        c_par = self.tab_bias_parameters["c"]
 
         # bias
         _nu = nu.T
