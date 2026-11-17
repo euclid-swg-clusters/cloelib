@@ -54,7 +54,7 @@ class ClusterCovariance:
         self.cluster_statitstics_modeling = (
             summary_statistic.cluster_statitstics_modeling
         )
-        self.L = ell_max
+        self.ell_max = ell_max
         self.z_tab_integ = z_tab_integ
         self.rint = None
 
@@ -114,8 +114,13 @@ class ClusterCovariance:
             if prediction.ndim != 2 or prediction.shape[0] != z_obs_edges.size - 1:
                 raise ValueError("Count shape does not match the redshift bins.")
             # The spatial-window loop fills this workspace in increasing bin order.
-            k = self.cluster_statitstics_modeling.tabulated_integrands["k"]
-            self.rint = np.zeros((z_obs_edges.size - 1, len(k), self.L + 1))
+            self.rint = np.zeros(
+                (
+                    z_obs_edges.size - 1,
+                    len(self.cluster_statitstics_modeling.tabulated_integrands["k"]),
+                    self.ell_max + 1,
+                )
+            )
             return self._get_NC_covariance(
                 z_obs_edges,
                 prediction,
@@ -149,7 +154,7 @@ class ClusterCovariance:
             Coefficients up to L multipole
         """
 
-        ell = np.linspace(0, self.L, self.L + 1, dtype=int)
+        ell = np.linspace(0, self.ell_max, self.ell_max + 1, dtype=int)
 
         area = self.cluster_statitstics_modeling.area
         theta = np.arccos(1 - (area * (np.pi / 180.0) ** 2.0) / (2 * np.pi))
@@ -188,7 +193,6 @@ class ClusterCovariance:
         zarr_iz = np.linspace(z_window_edges[0], z_window_edges[1], self.z_tab_integ)
 
         background = self.cluster_statitstics_modeling.halo_model_properties.background
-        k = self.cluster_statitstics_modeling.tabulated_integrands["k"]
 
         rvec = background.comoving_distance(zarr_iz) * (
             background.H0 / 100.0
@@ -196,7 +200,10 @@ class ClusterCovariance:
 
         Vz = (rvec[-1] ** 3 - rvec[0] ** 3) / 3  # Mpc^3 h^{-3}
 
-        kr = k[:, np.newaxis] * rvec
+        kr = (
+            self.cluster_statitstics_modeling.tabulated_integrands["k"][:, np.newaxis]
+            * rvec
+        )
 
         self.rint[iz] = (
             1
@@ -204,7 +211,7 @@ class ClusterCovariance:
             * simpson(
                 rvec**2.0
                 * np.array(
-                    [spherical_jn(_l, kr, derivative=False) for _l in range(self.L + 1)]
+                    [spherical_jn(_l, kr, derivative=False) for _l in range(self.ell_max + 1)]
                 ),
                 x=rvec,
                 axis=-1,
