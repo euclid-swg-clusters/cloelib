@@ -38,20 +38,22 @@ class ClusterCovariance:
         --------
         compute : Select and evaluate the appropriate covariance.
         """
-        if isinstance(summary_statistic, ClusterWeakLensing):
+        if isinstance(summary_statistic, ClusterCounts):
+            self._cov_type = "counts"
+        elif isinstance(summary_statistic, ClusterClustering):
+            self._cov_type = "clustering"
+        elif isinstance(summary_statistic, ClusterWeakLensing):
             raise NotImplementedError("Weak-lensing covariance is not implemented.")
-        if not isinstance(summary_statistic, (ClusterCounts, ClusterClustering)):
+        else:
             raise TypeError("Expected ClusterCounts or ClusterClustering.")
         if not isinstance(z_tab_integ, (int, np.integer)) or z_tab_integ < 2:
             raise ValueError("z_tab_integ must be an integer >= 2.")
         if not isinstance(ell_max, (int, np.integer)) or ell_max < 0:
             raise ValueError("ell_max must be a nonnegative integer.")
 
-        self.summary_statistic = summary_statistic
-        self.modeling = summary_statistic.cluster_statitstics_modeling
-        self.background = self.modeling.halo_model_properties.background
-        self.area = self.modeling.area
-        self.k = self.modeling.tabulated_integrands["k"]
+        self.cluster_statitstics_modeling = (
+            summary_statistic.cluster_statitstics_modeling
+        )
         self.L = ell_max
         self.z_tab_integ = z_tab_integ
         self.rint = None
@@ -95,7 +97,7 @@ class ClusterCovariance:
         >>> xi, products = clustering.get_xi0(z_edges, richness_edges, radius_edges)
         >>> matrix = ClusterCovariance(clustering).compute(intermediates=products)
         """
-        if isinstance(self.summary_statistic, ClusterCounts):
+        if self._cov_type == "counts":
             if prediction is None or z_obs_edges is None:
                 raise ValueError("Counts require prediction and z_obs_edges.")
             z_obs_edges = np.asarray(z_obs_edges)
@@ -112,7 +114,8 @@ class ClusterCovariance:
             if prediction.ndim != 2 or prediction.shape[0] != z_obs_edges.size - 1:
                 raise ValueError("Count shape does not match the redshift bins.")
             # The spatial-window loop fills this workspace in increasing bin order.
-            self.rint = np.zeros((z_obs_edges.size - 1, len(self.k), self.L + 1))
+            k = self.cluster_statitstics_modeling.tabulated_integrands["k"]
+            self.rint = np.zeros((z_obs_edges.size - 1, len(k), self.L + 1))
             return self._get_NC_covariance(
                 z_obs_edges,
                 prediction,
@@ -148,7 +151,8 @@ class ClusterCovariance:
 
         ell = np.linspace(0, self.L, self.L + 1, dtype=int)
 
-        theta = np.arccos(1 - (self.area * (np.pi / 180.0) ** 2.0) / (2 * np.pi))
+        area = self.cluster_statitstics_modeling.area
+        theta = np.arccos(1 - (area * (np.pi / 180.0) ** 2.0) / (2 * np.pi))
 
         KL = (
             np.sqrt(np.pi / (2.0 * ell + 1.0))
@@ -183,13 +187,16 @@ class ClusterCovariance:
         """
         zarr_iz = np.linspace(z_window_edges[0], z_window_edges[1], self.z_tab_integ)
 
-        rvec = self.background.comoving_distance(zarr_iz) * (
-            self.background.H0 / 100.0
+        background = self.cluster_statitstics_modeling.halo_model_properties.background
+        k = self.cluster_statitstics_modeling.tabulated_integrands["k"]
+
+        rvec = background.comoving_distance(zarr_iz) * (
+            background.H0 / 100.0
         )  # Mpc h^{-1}
 
         Vz = (rvec[-1] ** 3 - rvec[0] ** 3) / 3  # Mpc^3 h^{-3}
 
-        kr = self.k[:, np.newaxis] * rvec
+        kr = k[:, np.newaxis] * rvec
 
         self.rint[iz] = (
             1
@@ -225,17 +232,19 @@ class ClusterCovariance:
         z_mid = 0.5 * (z_obs_edges[1:] + z_obs_edges[:-1])
 
         # power spectrum at the center of observed redshift bins (z_obs, k)
-        pk = self.modeling.halo_model_properties.matter_power_spectrum_cb(
-            z_mid, self.modeling.tabulated_integrands["k"]
+        pk = self.cluster_statitstics_modeling.halo_model_properties.matter_power_spectrum_cb(
+            z_mid, self.cluster_statitstics_modeling.tabulated_integrands["k"]
         )
 
         # corrected halo Pk (only 0-th order correction is enough for number counts covariance)
         # can neglect richness dependence here
         pk *= photoz_rsd_monopole_correction(
-            self.modeling.halo_model_properties.background,
+            self.cluster_statitstics_modeling.halo_model_properties.background,
             z_mid,
-            self.modeling.tabulated_integrands["k"],
-            self.modeling.selection_function.scatter_z_obs(0, z_mid),
+            self.cluster_statitstics_modeling.tabulated_integrands["k"],
+            self.cluster_statitstics_modeling.selection_function.scatter_z_obs(
+                0, z_mid
+            ),
         )[0]
 
         # spherical harmonic expansion coefficients (covariance)
@@ -245,7 +254,7 @@ class ClusterCovariance:
         spatial_cov = np.zeros((z_obs_edges_size, z_obs_edges_size))
         for ind_z in range(z_obs_edges_size):
             spatial_cov[ind_z, : (ind_z + 1)] = (
-                self.modeling.integrate_probe_function_in_dk(
+                self.cluster_statitstics_modeling.integrate_probe_function_in_dk(
                     np.sqrt(pk[ind_z] * pk[: (ind_z + 1)])
                     * self._cov_window(
                         ind_z,
@@ -293,10 +302,10 @@ class ClusterCovariance:
 
         # integral of P(lambda_obs|M, z)*dn/dM*bias on lambda_obs bins and mass : (lambda_obs, ztrue)
         # cluster integrated bias : (z_obs, lambda_obs)
-        halo_bias_mean_values = self.modeling.integrate_probe_function_in_redshift(
+        halo_bias_mean_values = self.cluster_statitstics_modeling.integrate_probe_function_in_redshift(
             # integral of P(lambda_obs|M, z)*dn/dM*bias on lambda_obs bins and mass : (lambda_obs, ztrue)
-            self.modeling.integrate_probe_function_in_mass(
-                self.modeling.tabulated_integrands["bias(ztrue,M)"],
+            self.cluster_statitstics_modeling.integrate_probe_function_in_mass(
+                self.cluster_statitstics_modeling.tabulated_integrands["bias(ztrue,M)"],
                 window_lambda_obs,
             ),
             window_z_obs,
@@ -367,8 +376,10 @@ class ClusterCovariance:
         ########################################
 
         # Compute observed volume in each redshift bin : (z_obs, lambda_obs)
-        volume_mean_values = self.modeling.integrate_probe_function_in_redshift(
-            np.ones((1, 1)), window_z_obs
+        volume_mean_values = (
+            self.cluster_statitstics_modeling.integrate_probe_function_in_redshift(
+                np.ones((1, 1)), window_z_obs
+            )
         )
         # Compute output shot-noise terms : (z_obs, lambda_obs, lambda_obs)
         vol_over_cluster_counts = (
@@ -453,7 +464,7 @@ class ClusterCovariance:
                         ind_radius,
                         ind_radius,
                     ] = (
-                        self.modeling.integrate_probe_function_in_dk(
+                        self.cluster_statitstics_modeling.integrate_probe_function_in_dk(
                             radial_shell_window[:, ind_radius, :]
                             * beta_pk_mean_values[:, ind_lambda_i, ind_lambda_j, :],
                         )
@@ -478,7 +489,7 @@ class ClusterCovariance:
                             ind_lambda_h,
                             :,
                             :,
-                        ] = self.modeling.integrate_probe_function_in_k(
+                        ] = self.cluster_statitstics_modeling.integrate_probe_function_in_k(
                             radial_shell_window[:, np.newaxis, :, :]
                             * radial_shell_window[:, :, np.newaxis, :]
                             * avol_bpk_mean_values[
@@ -487,7 +498,9 @@ class ClusterCovariance:
                             * avol_bpk_mean_values[
                                 :, ind_lambda_j, ind_lambda_h, np.newaxis, np.newaxis, :
                             ]
-                            * self.modeling.tabulated_integrands["dk"],
+                            * self.cluster_statitstics_modeling.tabulated_integrands[
+                                "dk"
+                            ],
                         )
 
         # Compute the covariance : (z_obs, lambda_obs,  lambda_obs, lambda_obs, lambda_obs, radius, radius)
