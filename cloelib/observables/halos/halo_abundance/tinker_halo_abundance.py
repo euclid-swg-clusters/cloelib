@@ -27,6 +27,18 @@ class TinkerHaloAbundance(HaloAbundanceBase):
         self.overdensity_type = overdensity_type
         self.overdensity = overdensity
 
+        # parameters (Table 2 of Tinker et al. 2008, arXiv:0803.2706), as a function of the
+        # overdensity with respect to the mean density
+        self.tab_parameters = {
+            "Delta": np.array([200, 300, 400, 600, 800, 1200, 1600, 2400, 3200]),
+            "A0": np.array(
+                [0.186, 0.200, 0.212, 0.218, 0.248, 0.255, 0.260, 0.260, 0.260]
+            ),
+            "a0": np.array([1.47, 1.52, 1.56, 1.61, 1.87, 2.13, 2.30, 2.53, 2.66]),
+            "b0": np.array([2.57, 2.25, 2.05, 1.87, 1.59, 1.51, 1.46, 1.44, 1.41]),
+            "c0": np.array([1.19, 1.27, 1.34, 1.45, 1.58, 1.80, 1.97, 2.24, 2.44]),
+        }
+
     def f_sigma_nu(self, z, M):
         r"""
         Computation of the multiplicity function.
@@ -63,15 +75,8 @@ class TinkerHaloAbundance(HaloAbundanceBase):
         # HMF computations
         ##################
 
-        # parameters (Table 2 of Tinker et al. 2008, arXiv:0803.2706), as a function of the
-        # overdensity with respect to the mean density
-        Delta_tab = np.array([200, 300, 400, 600, 800, 1200, 1600, 2400, 3200])
-        A0_tab = np.array(
-            [0.186, 0.200, 0.212, 0.218, 0.248, 0.255, 0.260, 0.260, 0.260]
-        )
-        a0_tab = np.array([1.47, 1.52, 1.56, 1.61, 1.87, 2.13, 2.30, 2.53, 2.66])
-        b0_tab = np.array([2.57, 2.25, 2.05, 1.87, 1.59, 1.51, 1.46, 1.44, 1.41])
-        c0_tab = np.array([1.19, 1.27, 1.34, 1.45, 1.58, 1.80, 1.97, 2.24, 2.44])
+        # tabulated parameters (Table 2 of Tinker et al. 2008), see __init__
+        Delta_tab = self.tab_parameters["Delta"]
 
         if np.any(Delta < Delta_tab[0]) or np.any(Delta > Delta_tab[-1]):
             raise ValueError(
@@ -80,10 +85,10 @@ class TinkerHaloAbundance(HaloAbundanceBase):
             )
 
         # Compute main quantities
-        A0 = np.interp(Delta, Delta_tab, A0_tab)
-        a0 = np.interp(Delta, Delta_tab, a0_tab)
-        b0 = np.interp(Delta, Delta_tab, b0_tab)
-        c = np.interp(Delta, Delta_tab, c0_tab)
+        A0 = np.interp(Delta, Delta_tab, self.tab_parameters["A0"])
+        a0 = np.interp(Delta, Delta_tab, self.tab_parameters["a0"])
+        b0 = np.interp(Delta, Delta_tab, self.tab_parameters["b0"])
+        c = np.interp(Delta, Delta_tab, self.tab_parameters["c0"])
         alpha = 10.0 ** (-((0.75 / np.log10(Delta / 75.0)) ** 1.2))
 
         A = A0 * (1.0 + np.asarray(z)) ** -0.14
