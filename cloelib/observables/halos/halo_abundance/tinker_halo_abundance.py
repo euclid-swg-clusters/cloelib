@@ -144,14 +144,14 @@ class TinkerHaloAbundance(HaloAbundanceBase):
 
         # parameters
         y = np.log10(Delta)
+        ones = np.ones_like(y)
+        yexp = np.exp(-((4.0 / y) ** 4))
 
-        A_par = np.dot(
-            self.tab_bias_parameters["A"], (1, y * np.exp(-((4.0 / y) ** 4)))
-        )
-        a_par = np.dot(self.tab_bias_parameters["a"], (y, -1))
+        A_par = np.dot(self.tab_bias_parameters["A"], (ones, y * yexp))
+        a_par = np.dot(self.tab_bias_parameters["a"], (y, -ones))
         B_par = self.tab_bias_parameters["B"]
         b_par = self.tab_bias_parameters["b"]
-        C_par = np.dot(self.tab_bias_parameters["C"], (1, y, np.exp(-((4.0 / y) ** 4))))
+        C_par = np.dot(self.tab_bias_parameters["C"], (ones, y, yexp))
         c_par = self.tab_bias_parameters["c"]
 
         # bias
