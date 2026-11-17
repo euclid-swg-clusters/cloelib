@@ -211,7 +211,10 @@ class ClusterCovariance:
             * simpson(
                 rvec**2.0
                 * np.array(
-                    [spherical_jn(_l, kr, derivative=False) for _l in range(self.ell_max + 1)]
+                    [
+                        spherical_jn(_l, kr, derivative=False)
+                        for _l in range(self.ell_max + 1)
+                    ]
                 ),
                 x=rvec,
                 axis=-1,
