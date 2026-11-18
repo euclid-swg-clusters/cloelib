@@ -87,7 +87,7 @@ def test_count_covariance():
     )
     CC = ClusterCovariance(ClusterCounts(clusterstatmod), z_tab_integ=z_tab_integ)
     # Exercise the unchanged internal survey-window kernel against reference values.
-    CC.rint = np.zeros((nbins_z, len(k_test), CC.L + 1))
+    CC.rint = np.zeros((nbins_z, len(k_test), CC.ell_max + 1))
 
     print("    Covariance coefficients")
     KL = CC._Kl_coeff()
