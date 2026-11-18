@@ -91,9 +91,7 @@ def _test_clustering(CL, perturbations):
     assert_allclose(VF, ref_radial_shell_window_and_volume1, rtol=1e-03)
 
     WF2, VF2 = CL.radial_shell_quadrupole_window_and_volume(z_test, k_test, r_test)
-    WF4, VF4 = CL.radial_shell_hexadecapole_window_and_volume(
-        z_test, k_test, r_test
-    )
+    WF4, VF4 = CL.radial_shell_hexadecapole_window_and_volume(z_test, k_test, r_test)
     assert_equal(WF2.shape, WF.shape)
     assert_equal(WF4.shape, WF.shape)
     assert_allclose(VF2, VF)
@@ -105,9 +103,7 @@ def _test_clustering(CL, perturbations):
     Pk_test = perturbations.matter_power_spectrum(
         z_test, k_test, hubble_units=True, k_hunit=True
     )
-    assert_allclose(
-        CL.Pk_IR_func(k_test, Pk_test)[:, [0, -1]], ref_Pk_IR, rtol=1e-4
-    )
+    assert_allclose(CL.Pk_IR_func(k_test, Pk_test)[:, [0, -1]], ref_Pk_IR, rtol=1e-4)
 
 
 def test_clustering():
