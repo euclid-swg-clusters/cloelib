@@ -25,12 +25,14 @@ The script's docstring and comments describe the model in detail.
 ## Installation
 
 ```bash
-git clone git@github.com:m-aguena/cloelib.git
+git clone --branch sbi-mocks-v1 https://github.com/euclid-swg-clusters/cloelib.git
 cd cloelib
-git checkout sbi-mocks-v1
+python -m venv ../venv-cloelib && source ../venv-cloelib/bin/activate   # optional, recommended
 pip install -e .
-pip install cosmopower-jax jax camb  # if not already installed
+pip install cosmopower-jax camb astropy   # used by the cluster modules, not installed by cloelib
 ```
+
+Python >= 3.10 is required.
 
 The power-spectrum emulators (~10 MB) are downloaded from Zenodo the first time the script runs. They
 are saved in `cloelib/cosmology/emulator-data-jax/`.

@@ -103,7 +103,7 @@ The output is written every --checkpoint points, and a run can be continued with
 Requirements
 ------------
 cloelib at tag sbi-mocks-v1 (``pip install -e .`` in the repository), numpy, scipy, jax,
-cosmopower_jax, camb. The calibration file ``calibration_A1900_apLtr_perc.npz`` must be in the
+cosmopower_jax, camb, astropy. The calibration file ``calibration_A1900_apLtr_perc.npz`` must be in the
 directory of this script (or given with --calibration).
 Cost: ~4 s per point and process on an idle CPU core (model ~2 s, half of it the miscentred profiles;
 covariances ~2 s, mostly the g_t one), plus ~10 s of start-up per process (emulators, JAX).
