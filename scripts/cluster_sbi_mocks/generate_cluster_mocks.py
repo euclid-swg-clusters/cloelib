@@ -74,6 +74,13 @@ Usage
 
     python generate_cluster_mocks.py --list-params      # parameters, fiducials and priors
 
+    # faster options (both off by default):
+    #   --cov-fiducial   : noise covariances computed once at the fiducial point, not at each point
+    #                      (~2 s instead of ~4 s per point)
+    #   --no-miscentring : all the clusters centred, misc_* parameters fixed and ignored (~1 s less per
+    #                      point; g_t changes by up to ~80%, and B(R) was calibrated with miscentring)
+    python generate_cluster_mocks.py --n-points 10000 --ncpu 16 --cov-fiducial --output mocks_fast.npz
+
 Output (.npz)
 -------------
     theta          (n_points, n_params)        parameter values (all the parameters, fixed ones too)
@@ -88,6 +95,8 @@ Output (.npz)
     cov_nc         (n_points, n_z n_l, n_z n_l)       (with --save-cov) NC covariance, index z * n_l + l
     cov_gt         (n_points, n_z, n_l n_R, n_l n_R)  (with --save-cov) g_t covariance of each z bin,
                                                        index l * n_R + r
+    nc_fid, cov_nc_fid, cov_gt_fid                    (with --cov-fiducial) fiducial counts and the
+                                                       covariances used for all the points
     z_obs_edges, lambda_obs_edges, r_edges_comoving, area, and the run settings.
 The output is written every --checkpoint points, and a run can be continued with --resume.
 
@@ -441,9 +450,11 @@ class ComovingOffsetProfile:
 class ClusterModel:
     """Mean observables and covariances at a parameter point."""
 
-    def __init__(self, cal, area=AREA, n_eff=N_EFF, sigma_e=SIGMA_E, misc_profile="emu"):
+    def __init__(self, cal, area=AREA, n_eff=N_EFF, sigma_e=SIGMA_E, misc_profile="emu", miscentring=True):
+        """miscentring=False: all the clusters are centred (the misc_* parameters are ignored), which
+        halves the cost of the lensing model; note that B(R) was calibrated with miscentring."""
         self.cal, self.area, self.n_eff, self.sigma_e = cal, area, n_eff, sigma_e
-        self.misc_profile = misc_profile
+        self.misc_profile, self.miscentring = misc_profile, miscentring
         self.names = list(PARAMETERS)
 
     def _modeling(self, castro, ztrue):
@@ -503,13 +514,15 @@ class ClusterModel:
         if exclusion_background is not None:
             profile_kwargs["exclusion_background"] = exclusion_background
         centred = BMOHaloProfile(matter_stat, **profile_kwargs)
-        misc_cls = MiscBMOHaloProfileEmu if self.misc_profile == "emu" else MiscBMOHaloProfile
-        miscentred = ComovingOffsetProfile(misc_cls(matter_stat, **profile_kwargs))
+        miscentred, mixture = None, None  # no miscentring: all the clusters centred
+        if self.miscentring:
+            misc_cls = MiscBMOHaloProfileEmu if self.misc_profile == "emu" else MiscBMOHaloProfile
+            miscentred = ComovingOffsetProfile(misc_cls(matter_stat, **profile_kwargs))
+            f, s1, s2 = p["misc_f"], p["misc_s1"], p["misc_s2"]
+            mixture = ((f, s1), (1.0 - f, s2))
         weak_lensing = ClusterWeakLensing(
             csm_gt, centred, halo_concentration=c_of_m, selection_function=selection, miscentered_profile=miscentred
         )
-        f, s1, s2 = p["misc_f"], p["misc_s1"], p["misc_s2"]
-        mixture = ((f, s1), (1.0 - f, s2))
         # optical selection bias, with the systematic parameters B_s, B_da<k>:
         #     B - 1 = (1 + B_s) [Bbar - 1 + sum_k (a_k + B_da<k>) e_k]
         # (a_k: calibrated amplitudes of each bin, fixed)
@@ -572,19 +585,22 @@ def _cholesky(cov):
     raise np.linalg.LinAlgError("covariance not positive definite")
 
 
-def add_noise(nc, gt, cov_nc, cov_gt, n_real, rng, nc_noise="gaussian"):
+def add_noise(nc, gt, cov_nc, cov_gt, n_real, rng, nc_noise="gaussian", nc_cov=None):
     """n_real noisy realisations of (nc, gt).
     nc_noise = "gaussian": N ~ Gauss(nc, cov_nc), negative counts set to 0 (rounded to integers);
     nc_noise = "poisson" : sample variance as a Gaussian field (cov_nc minus its shot-noise diagonal),
                            then Poisson counts of that mean (clipped at 0): integer counts, Poisson
-                           statistics in the poorly populated bins."""
+                           statistics in the poorly populated bins.
+    nc_cov: the counts at which cov_nc was computed (its shot noise is diag(nc_cov)), if not nc
+    (covariance fixed at the fiducial point, --cov-fiducial)."""
     n_z, n_l, n_r = gt.shape
     if nc_noise == "gaussian":
         L = _cholesky(cov_nc)
         nc_r = nc.ravel()[None, :] + rng.standard_normal((n_real, nc.size)) @ L.T
         nc_r = np.rint(np.clip(nc_r, 0.0, None))
     else:
-        cov_sv = cov_nc - np.diag(nc.ravel())  # sample variance part (shot noise = diagonal of N)
+        # sample variance part (shot noise = diagonal of N)
+        cov_sv = cov_nc - np.diag((nc if nc_cov is None else nc_cov).ravel())
         L = _cholesky(cov_sv)
         mean = np.clip(nc.ravel()[None, :] + rng.standard_normal((n_real, nc.size)) @ L.T, 0.0, None)
         nc_r = rng.poisson(mean).astype(float)
@@ -607,7 +623,7 @@ def _init_worker(cfg):
     warnings.filterwarnings("ignore")
     cal = load_calibration(cfg["calibration"])
     _WORKER["model"] = ClusterModel(cal, area=cfg["area"], n_eff=cfg["n_eff"], sigma_e=cfg["sigma_e"],
-                                    misc_profile=cfg["misc_profile"])
+                                    misc_profile=cfg["misc_profile"], miscentring=cfg["miscentring"])
     _WORKER["cfg"] = cfg
 
 
@@ -618,9 +634,15 @@ def _run_point(task):
     cal = model.cal
     t0 = time.time()
     try:
-        nc, gt, cov_nc, cov_gt = model(theta, with_covariance=True)
         rng = np.random.default_rng(seed)
-        nc_r, gt_r = add_noise(nc, gt, cov_nc, cov_gt, cfg["n_real"], rng, cfg["nc_noise"])
+        if cfg["cov_fiducial"] is None:  # covariances at this point
+            nc, gt, cov_nc, cov_gt = model(theta, with_covariance=True)
+            nc_r, gt_r = add_noise(nc, gt, cov_nc, cov_gt, cfg["n_real"], rng, cfg["nc_noise"])
+        else:  # covariances computed once at the fiducial point (--cov-fiducial)
+            nc, gt = model(theta, with_covariance=False)
+            nc_fid, cov_nc, cov_gt = cfg["cov_fiducial"]
+            nc_r, gt_r = add_noise(nc, gt, cov_nc, cov_gt, cfg["n_real"], rng, cfg["nc_noise"], nc_cov=nc_fid)
+            cov_nc = cov_gt = None  # saved once in the output, not per point
         ok = bool(np.all(np.isfinite(nc)) and np.all(np.isfinite(gt)))
     except Exception as err:  # failed point: NaN outputs, flagged in "ok"
         print(f"  point {index}: model failed ({type(err).__name__}: {err})", flush=True)
@@ -679,7 +701,13 @@ def main():
     parser.add_argument("--n-points", type=int, default=10, help="number of points (mode prior)")
     parser.add_argument("--n-real", type=int, default=1, help="noise realisations per point")
     parser.add_argument("--theta-file", help="parameter points (mode file): .npy (n, n_params) or .npz (one array per name)")
-    parser.add_argument("--fix", default="", help="parameters or groups (cosmo, hod, misc, pca) fixed to the fiducial")
+    parser.add_argument("--fix", default="", help="parameters or groups (cosmo, hod, misc, bsys) fixed to the fiducial")
+    parser.add_argument("--cov-fiducial", action="store_true",
+                        help="noise covariances computed once at the fiducial point instead of at each point "
+                             "(~2x faster); saved in the output as cov_nc_fid, cov_gt_fid")
+    parser.add_argument("--no-miscentring", action="store_true",
+                        help="all the clusters centred (misc_* parameters fixed and ignored; ~1 s faster per point). "
+                             "Note: B(R) was calibrated with miscentring")
     parser.add_argument("--nc-noise", choices=("gaussian", "poisson"), default="gaussian",
                         help="NC noise: Gaussian with the full covariance (clipped at 0), or Poisson x Gaussian sample variance")
     parser.add_argument("--area", type=float, default=AREA, help="survey area [deg2]")
@@ -699,6 +727,8 @@ def main():
 
     cal = load_calibration(args.calibration)
     fixed = expand_fixed(args.fix)
+    if args.no_miscentring:  # the miscentring parameters do not enter the model
+        fixed |= set(PARAMETER_GROUPS["misc"])
     if args.list_params:
         print_parameters(fixed)
         return
@@ -727,9 +757,24 @@ def main():
         fiducial=np.array([PARAMETERS[p][0] for p in names]),
         z_obs_edges=cal.z_obs_edges, lambda_obs_edges=cal.lambda_obs_edges, r_edges_comoving=cal.r_edges,
         area=args.area, n_eff=args.n_eff, sigma_e=args.sigma_e, nc_noise=args.nc_noise, mode=args.mode,
-        misc_profile=args.misc_profile, master_seed=args.seed,
-        piccolo_2halo=PICCOLO_2HALO, save_cov=args.save_cov, command=" ".join(sys.argv),
+        misc_profile=args.misc_profile, master_seed=args.seed, miscentring=not args.no_miscentring,
+        cov_fiducial=args.cov_fiducial, piccolo_2halo=PICCOLO_2HALO,
+        # per-point covariances only if they are computed at each point
+        save_cov=args.save_cov and not args.cov_fiducial, command=" ".join(sys.argv),
     )
+
+    # --cov-fiducial: covariances computed once, here, at the fiducial point (with the same model options)
+    cov_fiducial = None
+    if args.cov_fiducial:
+        t0 = time.time()
+        warnings.filterwarnings("ignore")
+        model_fid = ClusterModel(cal, area=args.area, n_eff=args.n_eff, sigma_e=args.sigma_e,
+                                 misc_profile=args.misc_profile, miscentring=not args.no_miscentring)
+        nc_fid, _, cov_nc_fid, cov_gt_fid = model_fid(base["fiducial"], with_covariance=True)
+        cov_fiducial = (nc_fid, cov_nc_fid, cov_gt_fid)
+        base.update(nc_fid=nc_fid, cov_nc_fid=cov_nc_fid, cov_gt_fid=cov_gt_fid)
+        print(f"Covariances at the fiducial point: {time.time() - t0:.1f} s", flush=True)
+
     results = {}
     if args.resume and os.path.exists(args.output):
         old = np.load(args.output)
@@ -737,12 +782,13 @@ def main():
             sys.exit(f"--resume: {args.output} was made with different parameter points")
         for n, i in enumerate(old["index"]):
             results[int(i)] = (int(i), old["nc_mean"][n], old["gt_mean"][n], old["nc"][n], old["gt"][n],
-                               old["cov_nc"][n] if args.save_cov else None,
-                               old["cov_gt"][n] if args.save_cov else None, bool(old["ok"][n]), 0.0)
+                               old["cov_nc"][n] if base["save_cov"] else None,
+                               old["cov_gt"][n] if base["save_cov"] else None, bool(old["ok"][n]), 0.0)
         print(f"Resuming: {len(results)} of {n_points} points already in {args.output}")
 
     cfg = dict(calibration=args.calibration, area=args.area, n_eff=args.n_eff, sigma_e=args.sigma_e,
-               misc_profile=args.misc_profile, n_real=args.n_real, nc_noise=args.nc_noise)
+               misc_profile=args.misc_profile, n_real=args.n_real, nc_noise=args.nc_noise,
+               miscentring=not args.no_miscentring, cov_fiducial=cov_fiducial)
     tasks = [(i, theta[i], int(seeds[i])) for i in range(n_points) if i not in results]
     print(f"{len(tasks)} points x {args.n_real} realisations, {args.ncpu} processes -> {args.output}", flush=True)
 
@@ -758,7 +804,7 @@ def main():
         iterator = map(_run_point, tasks)
     try:
         for res in iterator:
-            if not args.save_cov:  # do not keep the covariances in memory
+            if not base["save_cov"]:  # do not keep the covariances in memory
                 res = res[:5] + (None, None) + res[7:]
             results[res[0]] = res
             done_since_save += 1

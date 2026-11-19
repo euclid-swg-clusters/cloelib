@@ -66,7 +66,22 @@ shared by all the bins:
 B(R) − 1 = (1 + B_s) [B̄(R) − 1 + Σ_k (a_k + B_da_k) e_k(R)]
 
 Cost: about 4 s per point and process on an idle CPU core, plus ~10 s of start-up per process. The
-model takes ~2 s (half of it the miscentred profiles) and the covariances ~2 s. The output is written every `--checkpoint` points. Use `--resume` to continue an interrupted
+model takes ~2 s (half of it the miscentred profiles) and the covariances ~2 s. Two options, both off
+by default, make it faster:
+
+| Options | Time per point |
+|---|---|
+| default | ~4 s |
+| `--cov-fiducial` | ~2 s |
+| `--no-miscentring` | ~3 s |
+| `--cov-fiducial --no-miscentring` | ~1 s |
+
+- `--cov-fiducial` computes the noise covariances once, at the fiducial point, and uses them for all
+  the points. They are saved in the output as `cov_nc_fid` and `cov_gt_fid`.
+- `--no-miscentring` centres all the clusters and fixes the miscentring parameters. g_t then changes
+  by up to ~80% in some bins, and the B(R) calibration assumed miscentring.
+
+The output is written every `--checkpoint` points. Use `--resume` to continue an interrupted
 run, or to extend it with a larger `--n-points`: the parameter points and the noise are reproducible
 from `--seed`.
 
