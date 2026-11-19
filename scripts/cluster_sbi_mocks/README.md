@@ -110,9 +110,44 @@ The output is an `.npz` file. Its main arrays:
 
 The file also stores the bin edges and the run settings. The module docstring describes every array.
 
+## Likelihood inference (reference posteriors)
+
+`run_chain.py` runs nested sampling (dynesty) on one data vector of a mock file. It uses the same
+model, parameters and priors as the generator, so its posterior is the reference to compare SBI with.
+dynesty must be installed (`pip install dynesty`).
+
+```bash
+python generate_cluster_mocks.py --mode fiducial --n-real 1 --output mock_fid.npz
+python run_chain.py --data mock_fid.npz --ncpu 16 --output chain_fid.npz
+python run_chain.py --data mock_fid.npz --observables nc --ncpu 16 --output chain_fid_nc.npz
+python run_chain.py --data mocks_prior.npz --index 12 --real 3 --cov truth --output chain_12.npz
+```
+
+- `--index`, `--real`: the point and the noise realisation of the mock file to analyse.
+  `--noise-free` analyses the noise-free model of that point instead.
+- `--observables`: `both`, `nc` or `gt`.
+- `--cov`: the Gaussian likelihood uses the cloelib covariances, computed at the fiducial parameters
+  (`fiducial`, the default, as in the DR1 chains), at the true parameters of the mock point (`truth`),
+  or at each likelihood call (`varying`, with the ln det term, about twice slower).
+  - Mocks made with `--cov-fiducial` have noise drawn with the fiducial covariance: use `--cov fiducial`.
+  - The default mocks have noise drawn with the covariance of each point: use `--cov truth` or
+    `--cov varying`.
+- `--fix`: parameters or groups fixed to their true values.
+- The survey area, source density, shape noise and miscentring settings are read from the mock file.
+- An interrupted chain resumes from its checkpoint (`<output>.save`) when the same command is rerun.
+
+A chain needs about 1e5 likelihood calls (12 parameters, 500 live points). A call takes ~2 s for
+NC + g_t and ~0.25 s for NC only, so a chain takes a few hours (NC + g_t) or about 30 min (NC only) on
+16 cores.
+
+The output `.npz` has the weighted samples (`samples`, `weights`), `logl`, `logz`, the sampled
+`param_names` and their `truth`, the data and the covariances. The script prints the posterior means
+and their offsets from the truth.
+
 ## Files
 
-- `generate_cluster_mocks.py`: the script.
+- `generate_cluster_mocks.py`: the mock generator.
+- `run_chain.py`: likelihood inference with dynesty on a mock.
 - `calibration_A1900_apLtr_perc.npz`: PICCOLO calibrations of the A1900 setup (from the even patches
   of the percolated catalogues), containing:
   - the selection-function best fit;
