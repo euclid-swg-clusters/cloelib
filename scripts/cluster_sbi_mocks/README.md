@@ -45,8 +45,16 @@ python generate_cluster_mocks.py --list-params           # parameters, fiducial 
 python generate_cluster_mocks.py --n-points 1000 --ncpu 8 --output mocks_prior.npz
 python generate_cluster_mocks.py --mode fiducial --n-real 200 --output mocks_fiducial.npz
 python generate_cluster_mocks.py --n-points 1000 --fix misc,bsys --output mocks_fixed_nuisances.npz
+python generate_cluster_mocks.py --n-points 10000 --observables nc --output mocks_nc.npz   # NC only
+python generate_cluster_mocks.py --n-points 10000 --observables gt --output mocks_gt.npz   # g_t only
 python generate_cluster_mocks.py --help                   # all the options
 ```
+
+`--observables` selects what is computed: `both` (default), `nc` (number counts only) or `gt` (reduced
+shear only). The observable that is not requested, and its covariance, are not computed or saved.
+With `nc` the miscentring and B-systematics parameters are fixed, since they only enter the lensing.
+For the same `--seed`, the cosmology and richness–mass parameters of each point are the same whatever
+the choice.
 
 There are 12 free parameters:
 
@@ -77,6 +85,8 @@ by default, make it faster:
 | `--cov-fiducial` | ~2 s |
 | `--no-miscentring` | ~3 s |
 | `--cov-fiducial --no-miscentring` | ~1 s |
+| `--observables nc` | ~0.3 s |
+| `--observables gt` | ~3.6 s (~1.8 s with `--cov-fiducial`) |
 
 - `--cov-fiducial` computes the noise covariances once, at the fiducial point, and uses them for all
   the points. They are saved in the output as `cov_nc_fid` and `cov_gt_fid`.

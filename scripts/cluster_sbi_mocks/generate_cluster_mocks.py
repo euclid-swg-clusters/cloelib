@@ -74,6 +74,10 @@ Usage
 
     python generate_cluster_mocks.py --list-params      # parameters, fiducials and priors
 
+    # only the number counts (~10x faster) or only the reduced shear profiles
+    python generate_cluster_mocks.py --n-points 10000 --observables nc --output mocks_nc.npz
+    python generate_cluster_mocks.py --n-points 10000 --observables gt --output mocks_gt.npz
+
     # faster options (both off by default):
     #   --cov-fiducial   : noise covariances computed once at the fiducial point, not at each point
     #                      (~2 s instead of ~4 s per point)
@@ -98,6 +102,7 @@ Output (.npz)
     nc_fid, cov_nc_fid, cov_gt_fid                    (with --cov-fiducial) fiducial counts and the
                                                        covariances used for all the points
     z_obs_edges, lambda_obs_edges, r_edges_comoving, area, and the run settings.
+With --observables nc (gt) the g_t (NC) arrays are not written.
 The output is written every --checkpoint points, and a run can be continued with --resume.
 
 Requirements
@@ -450,11 +455,17 @@ class ComovingOffsetProfile:
 class ClusterModel:
     """Mean observables and covariances at a parameter point."""
 
-    def __init__(self, cal, area=AREA, n_eff=N_EFF, sigma_e=SIGMA_E, misc_profile="emu", miscentring=True):
+    def __init__(self, cal, area=AREA, n_eff=N_EFF, sigma_e=SIGMA_E, misc_profile="emu", miscentring=True,
+                 observables="both"):
         """miscentring=False: all the clusters are centred (the misc_* parameters are ignored), which
-        halves the cost of the lensing model; note that B(R) was calibrated with miscentring."""
+        halves the cost of the lensing model; note that B(R) was calibrated with miscentring.
+        observables: "both", "nc" (number counts only) or "gt" (reduced shear only); the observable
+        not requested (and its covariance) is not computed and returned as None."""
+        if observables not in ("both", "nc", "gt"):
+            raise ValueError(f"observables must be both, nc or gt, not {observables}")
         self.cal, self.area, self.n_eff, self.sigma_e = cal, area, n_eff, sigma_e
         self.misc_profile, self.miscentring = misc_profile, miscentring
+        self.do_nc, self.do_gt = observables in ("both", "nc"), observables in ("both", "gt")
         self.names = list(PARAMETERS)
 
     def _modeling(self, castro, ztrue):
@@ -466,14 +477,15 @@ class ClusterModel:
     def __call__(self, theta, with_covariance=True):
         """theta: values of all the parameters (order of PARAMETERS).
         Returns nc (n_z, n_l), gt (n_z, n_l, n_R) and, with_covariance, cov_nc (n_z n_l, n_z n_l) and
-        cov_gt (n_z, n_l n_R, n_l n_R)."""
+        cov_gt (n_z, n_l n_R, n_l n_R); None for the observables not requested."""
         cal = self.cal
         p = dict(zip(self.names, theta))
-        zob, lob, re = cal.z_obs_edges, cal.lambda_obs_edges, cal.r_edges
+        zob, lob = cal.z_obs_edges, cal.lambda_obs_edges
 
-        # --- cosmology: linear P(k), nonlinear P_cb (2-halo term with exclusion), HMF and bias
+        # --- cosmology: linear P(k), nonlinear P_cb (only for the lensing: 2-halo term with exclusion and
+        # lensing covariance), HMF and bias
         perturbations = get_perturbations(p["Omega_m"], p["sigma8"])
-        nonlinear = NonLinearBoostPerturbations(perturbations, SETTINGS["zed_interp"])
+        nonlinear = NonLinearBoostPerturbations(perturbations, SETTINGS["zed_interp"]) if self.do_gt else None
         matter_stat = MatterStatistics(
             perturbations, z=SETTINGS["ms_z"], k=SETTINGS["ms_k"], nonlinear_perturbations=nonlinear
         )
@@ -488,20 +500,43 @@ class ClusterModel:
             hmo, **dict(zip(cal.sel_names, cal.sel_p)),
             z_tab_integ=SETTINGS["z_tab_integ"], lambda_tab_integ=[SETTINGS["n_lambda_obs"]] * cal.n_l,
         )
-
-        # --- number counts (and their covariance: shot noise + sample variance)
+        # tables of the counts (also used by the lens sample of the g_t covariance)
         csm_nc = self._modeling(castro, SETTINGS["ztrue_nc"])
-        halo_cov = None
-        if with_covariance:
-            halo_cov = HaloCovariance(
-                perturbations, k=SETTINGS["k"], area=self.area, nbins_zob=cal.n_z, z_tab_integ=SETTINGS["z_tab_integ"]
-            )
-        counts = ClusterCounts(csm_nc, halo_cov, selection)
-        nc, aux = counts.get_NC(zob, lob, return_intermediate_products=True)
+
+        # --- number counts
+        nc = counts = aux = None
+        if self.do_nc:
+            halo_cov = None
+            if with_covariance:
+                halo_cov = HaloCovariance(
+                    perturbations, k=SETTINGS["k"], area=self.area, nbins_zob=cal.n_z, z_tab_integ=SETTINGS["z_tab_integ"]
+                )
+            counts = ClusterCounts(csm_nc, halo_cov, selection)
+            nc, aux = counts.get_NC(zob, lob, return_intermediate_products=True)
 
         # --- reduced shear profiles
+        gt = lensing = None
+        if self.do_gt:
+            gt, lensing = self._reduced_shear(p, castro, matter_stat, selection)
+        if not with_covariance:
+            return nc, gt
+
+        # --- covariances
+        cov_nc = cov_gt = None
+        if self.do_nc:
+            # NC: shot noise + sample variance, (z, z, l, l) -> (z l, z l)
+            n_nc = cal.n_z * cal.n_l
+            cov_nc = counts.get_NC_covariance(zob, nc, aux["window_z_lambda_obs"])
+            cov_nc = cov_nc.transpose(0, 2, 1, 3).reshape(n_nc, n_nc)
+        if self.do_gt:
+            cov_gt = self._reduced_shear_covariance(csm_nc, selection, nonlinear, lensing)
+        return nc, gt, cov_nc, cov_gt
+
+    def _reduced_shear(self, p, castro, matter_stat, selection):
+        """stacked reduced shear (n_z, n_l, n_R) and the objects needed by its covariance"""
+        cal = self.cal
+        zob, lob, re = cal.z_obs_edges, cal.lambda_obs_edges, cal.r_edges
         csm_gt = self._modeling(castro, SETTINGS["ztrue_gt"])
-        bias_scale = np.ones(csm_gt.tabulated_integrands["ztrue"].size)
         exclusion_background = None
         if PICCOLO_2HALO:
             tab = csm_gt.tabulated_integrands
@@ -532,22 +567,21 @@ class ClusterModel:
         amp = (1.0 + s_b) * (cal.pca_amp + da)  # (n_z, n_l, n_pca)
         # profile without the optical selection bias correction, then times B(R) (same as passing
         # opt_sel_bias_pca=(b_mean, modes, amp) to get_gt; the uncorrected profile is also needed for
-        # the PCA covariance below)
+        # the PCA covariance)
         gt_no_b = weak_lensing.get_gt(zob, lob, re, miscentering_params=mixture, comoving_radii=True)
         gt = gt_no_b * weak_lensing.optical_selection_bias_pca_correction(b_mean, cal.pca_modes, amp)
-        if not with_covariance:
-            return nc, gt
+        return gt, dict(weak_lensing=weak_lensing, centred=centred, miscentred=miscentred, gt_no_b=gt_no_b)
 
-        # --- covariances
-        # NC: (z, z, l, l) -> (z l, z l)
-        cov_nc = counts.get_NC_covariance(zob, nc, aux["window_z_lambda_obs"])
-        n_nc = cal.n_z * cal.n_l
-        cov_nc = cov_nc.transpose(0, 2, 1, 3).reshape(n_nc, n_nc)
-        # g_t: the cloelib lensing covariance takes physical radii; the bins are comoving, so it is
-        # computed for each z_ob bin with R_phys = R_com / (1 + z_mid). Its lens sample uses the halo
-        # bias of the counts (the 2-halo rescaling of the mock does not apply to the halo clustering).
+    def _reduced_shear_covariance(self, csm_nc, selection, nonlinear, lensing):
+        """covariance of the reduced shear of each z_ob bin, (n_z, n_l n_R, n_l n_R)"""
+        cal = self.cal
+        zob, lob, re = cal.z_obs_edges, cal.lambda_obs_edges, cal.r_edges
+        # the cloelib lensing covariance takes physical radii; the bins are comoving, so it is computed
+        # for each z_ob bin with R_phys = R_com / (1 + z_mid). Its lens sample uses the halo bias of the
+        # counts (the 2-halo rescaling of the mock does not apply to the halo clustering).
         weak_lensing_cov = ClusterWeakLensing(
-            csm_nc, centred, halo_concentration=c_of_m, selection_function=selection, miscentered_profile=miscentred
+            csm_nc, lensing["centred"], halo_concentration=c_of_m, selection_function=selection,
+            miscentered_profile=lensing["miscentred"],
         )
         cov_obj = ClusterWeakLensingCovariance(
             weak_lensing_cov, n_eff=self.n_eff, sigma_e=self.sigma_e, nonlinear_perturbations=nonlinear
@@ -558,14 +592,16 @@ class ClusterModel:
             z_mid = 0.5 * (zob[i] + zob[i + 1])
             c = cov_obj.get_gt_covariance(zob[i : i + 2], lob, re / (1.0 + z_mid))[0, 0]  # (l, l, r, r)
             cov_gt[i] = c.transpose(0, 2, 1, 3).reshape(n_lr, n_lr)
-        # g_t: statistical uncertainty of the calibrated amplitudes a_k (fixed in the model), propagated
-        # with the profile without B, added to each (z, lambda) block (as the A1900 and B_SYS chains)
-        c = weak_lensing.optical_selection_bias_pca_covariance(gt_no_b, cal.pca_modes, cal.pca_amp_cov)
+        # statistical uncertainty of the calibrated amplitudes a_k (fixed in the model), propagated with
+        # the profile without B, added to each (z, lambda) block (as the A1900 and B_SYS chains)
+        c = lensing["weak_lensing"].optical_selection_bias_pca_covariance(
+            lensing["gt_no_b"], cal.pca_modes, cal.pca_amp_cov
+        )
         for i in range(cal.n_z):
             for j in range(cal.n_l):
-                s = slice(j * cal.n_r, (j + 1) * cal.n_r)
-                cov_gt[i, s, s] += c[i, i, j, j]
-        return nc, gt, cov_nc, cov_gt
+                sl = slice(j * cal.n_r, (j + 1) * cal.n_r)
+                cov_gt[i, sl, sl] += c[i, i, j, j]
+        return cov_gt
 
 
 ########################################################################################################
@@ -592,9 +628,12 @@ def add_noise(nc, gt, cov_nc, cov_gt, n_real, rng, nc_noise="gaussian", nc_cov=N
                            then Poisson counts of that mean (clipped at 0): integer counts, Poisson
                            statistics in the poorly populated bins.
     nc_cov: the counts at which cov_nc was computed (its shot noise is diag(nc_cov)), if not nc
-    (covariance fixed at the fiducial point, --cov-fiducial)."""
-    n_z, n_l, n_r = gt.shape
-    if nc_noise == "gaussian":
+    (covariance fixed at the fiducial point, --cov-fiducial).
+    nc or gt None (observable not requested): None returned for it."""
+    nc_r = gt_r = None
+    if nc is None:
+        pass
+    elif nc_noise == "gaussian":
         L = _cholesky(cov_nc)
         nc_r = nc.ravel()[None, :] + rng.standard_normal((n_real, nc.size)) @ L.T
         nc_r = np.rint(np.clip(nc_r, 0.0, None))
@@ -604,11 +643,17 @@ def add_noise(nc, gt, cov_nc, cov_gt, n_real, rng, nc_noise="gaussian", nc_cov=N
         L = _cholesky(cov_sv)
         mean = np.clip(nc.ravel()[None, :] + rng.standard_normal((n_real, nc.size)) @ L.T, 0.0, None)
         nc_r = rng.poisson(mean).astype(float)
-    gt_r = np.empty((n_real, n_z, n_l, n_r))
-    for i in range(n_z):
-        L = _cholesky(cov_gt[i])
-        gt_r[:, i] = (gt[i].ravel()[None, :] + rng.standard_normal((n_real, n_l * n_r)) @ L.T).reshape(n_real, n_l, n_r)
-    return nc_r.reshape(n_real, n_z, n_l), gt_r
+    if nc_r is not None:
+        nc_r = nc_r.reshape((n_real,) + nc.shape)
+    if gt is not None:
+        n_z, n_l, n_r = gt.shape
+        gt_r = np.empty((n_real, n_z, n_l, n_r))
+        for i in range(n_z):
+            L = _cholesky(cov_gt[i])
+            gt_r[:, i] = (gt[i].ravel()[None, :] + rng.standard_normal((n_real, n_l * n_r)) @ L.T).reshape(
+                n_real, n_l, n_r
+            )
+    return nc_r, gt_r
 
 
 ########################################################################################################
@@ -623,7 +668,8 @@ def _init_worker(cfg):
     warnings.filterwarnings("ignore")
     cal = load_calibration(cfg["calibration"])
     _WORKER["model"] = ClusterModel(cal, area=cfg["area"], n_eff=cfg["n_eff"], sigma_e=cfg["sigma_e"],
-                                    misc_profile=cfg["misc_profile"], miscentring=cfg["miscentring"])
+                                    misc_profile=cfg["misc_profile"], miscentring=cfg["miscentring"],
+                                    observables=cfg["observables"])
     _WORKER["cfg"] = cfg
 
 
@@ -643,16 +689,19 @@ def _run_point(task):
             nc_fid, cov_nc, cov_gt = cfg["cov_fiducial"]
             nc_r, gt_r = add_noise(nc, gt, cov_nc, cov_gt, cfg["n_real"], rng, cfg["nc_noise"], nc_cov=nc_fid)
             cov_nc = cov_gt = None  # saved once in the output, not per point
-        ok = bool(np.all(np.isfinite(nc)) and np.all(np.isfinite(gt)))
+        ok = all(bool(np.all(np.isfinite(x))) for x in (nc, gt) if x is not None)
     except Exception as err:  # failed point: NaN outputs, flagged in "ok"
         print(f"  point {index}: model failed ({type(err).__name__}: {err})", flush=True)
-        nan = np.nan
-        nc = np.full((cal.n_z, cal.n_l), nan)
-        gt = np.full((cal.n_z, cal.n_l, cal.n_r), nan)
-        cov_nc = np.full((nc.size, nc.size), nan)
-        cov_gt = np.full((cal.n_z, cal.n_l * cal.n_r, cal.n_l * cal.n_r), nan)
-        nc_r = np.full((cfg["n_real"],) + nc.shape, nan)
-        gt_r = np.full((cfg["n_real"],) + gt.shape, nan)
+        nan, n_real = np.nan, cfg["n_real"]
+        nc = nc_r = cov_nc = gt = gt_r = cov_gt = None
+        if model.do_nc:
+            nc = np.full((cal.n_z, cal.n_l), nan)
+            nc_r = np.full((n_real,) + nc.shape, nan)
+            cov_nc = np.full((nc.size, nc.size), nan)
+        if model.do_gt:
+            gt = np.full((cal.n_z, cal.n_l, cal.n_r), nan)
+            gt_r = np.full((n_real,) + gt.shape, nan)
+            cov_gt = np.full((cal.n_z, cal.n_l * cal.n_r, cal.n_l * cal.n_r), nan)
         ok = False
     return index, nc, gt, nc_r, gt_r, cov_nc, cov_gt, ok, time.time() - t0
 
@@ -667,6 +716,8 @@ def _save(path, results, base):
     keys = ("nc_mean", "gt_mean", "nc", "gt", "cov_nc", "cov_gt", "ok")
     for k, pos in zip(keys, range(1, 8)):
         if k.startswith("cov") and not base["save_cov"]:
+            continue
+        if results[idx[0]][pos] is None:  # observable not requested
             continue
         out[k] = np.array([results[i][pos] for i in idx])
     tmp = path + ".tmp.npz"
@@ -705,6 +756,9 @@ def main():
     parser.add_argument("--cov-fiducial", action="store_true",
                         help="noise covariances computed once at the fiducial point instead of at each point "
                              "(~2x faster); saved in the output as cov_nc_fid, cov_gt_fid")
+    parser.add_argument("--observables", choices=("both", "nc", "gt"), default="both",
+                        help="observables to compute: number counts and reduced shear, only NC (~10x faster; "
+                             "misc and bsys parameters fixed), or only g_t")
     parser.add_argument("--no-miscentring", action="store_true",
                         help="all the clusters centred (misc_* parameters fixed and ignored; ~1 s faster per point). "
                              "Note: B(R) was calibrated with miscentring")
@@ -729,6 +783,8 @@ def main():
     fixed = expand_fixed(args.fix)
     if args.no_miscentring:  # the miscentring parameters do not enter the model
         fixed |= set(PARAMETER_GROUPS["misc"])
+    if args.observables == "nc":  # miscentring and B(R) only enter the lensing
+        fixed |= set(PARAMETER_GROUPS["misc"]) | set(PARAMETER_GROUPS["bsys"])
     if args.list_params:
         print_parameters(fixed)
         return
@@ -758,6 +814,7 @@ def main():
         z_obs_edges=cal.z_obs_edges, lambda_obs_edges=cal.lambda_obs_edges, r_edges_comoving=cal.r_edges,
         area=args.area, n_eff=args.n_eff, sigma_e=args.sigma_e, nc_noise=args.nc_noise, mode=args.mode,
         misc_profile=args.misc_profile, master_seed=args.seed, miscentring=not args.no_miscentring,
+        observables=args.observables,
         cov_fiducial=args.cov_fiducial, piccolo_2halo=PICCOLO_2HALO,
         # per-point covariances only if they are computed at each point
         save_cov=args.save_cov and not args.cov_fiducial, command=" ".join(sys.argv),
@@ -769,10 +826,13 @@ def main():
         t0 = time.time()
         warnings.filterwarnings("ignore")
         model_fid = ClusterModel(cal, area=args.area, n_eff=args.n_eff, sigma_e=args.sigma_e,
-                                 misc_profile=args.misc_profile, miscentring=not args.no_miscentring)
+                                 misc_profile=args.misc_profile, miscentring=not args.no_miscentring,
+                                 observables=args.observables)
         nc_fid, _, cov_nc_fid, cov_gt_fid = model_fid(base["fiducial"], with_covariance=True)
         cov_fiducial = (nc_fid, cov_nc_fid, cov_gt_fid)
-        base.update(nc_fid=nc_fid, cov_nc_fid=cov_nc_fid, cov_gt_fid=cov_gt_fid)
+        for k, v in dict(nc_fid=nc_fid, cov_nc_fid=cov_nc_fid, cov_gt_fid=cov_gt_fid).items():
+            if v is not None:
+                base[k] = v
         print(f"Covariances at the fiducial point: {time.time() - t0:.1f} s", flush=True)
 
     results = {}
@@ -781,14 +841,15 @@ def main():
         if not np.allclose(old["theta"], theta[old["index"]]):
             sys.exit(f"--resume: {args.output} was made with different parameter points")
         for n, i in enumerate(old["index"]):
-            results[int(i)] = (int(i), old["nc_mean"][n], old["gt_mean"][n], old["nc"][n], old["gt"][n],
-                               old["cov_nc"][n] if base["save_cov"] else None,
-                               old["cov_gt"][n] if base["save_cov"] else None, bool(old["ok"][n]), 0.0)
+            get = lambda k: old[k][n] if k in old.files else None  # noqa: E731 (absent: not requested)
+            results[int(i)] = (int(i), get("nc_mean"), get("gt_mean"), get("nc"), get("gt"),
+                               get("cov_nc") if base["save_cov"] else None,
+                               get("cov_gt") if base["save_cov"] else None, bool(old["ok"][n]), 0.0)
         print(f"Resuming: {len(results)} of {n_points} points already in {args.output}")
 
     cfg = dict(calibration=args.calibration, area=args.area, n_eff=args.n_eff, sigma_e=args.sigma_e,
                misc_profile=args.misc_profile, n_real=args.n_real, nc_noise=args.nc_noise,
-               miscentring=not args.no_miscentring, cov_fiducial=cov_fiducial)
+               miscentring=not args.no_miscentring, cov_fiducial=cov_fiducial, observables=args.observables)
     tasks = [(i, theta[i], int(seeds[i])) for i in range(n_points) if i not in results]
     print(f"{len(tasks)} points x {args.n_real} realisations, {args.ncpu} processes -> {args.output}", flush=True)
 
