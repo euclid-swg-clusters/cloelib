@@ -40,19 +40,22 @@ Model ("A1900" setup of the Euclid DR1 cluster tests: PICCOLO mock, 1900 deg2)
 * Optical selection bias (the richness-selected clusters are not a random subsample of the halos
   of the same mass): multiplicative correction of the profiles,
       B(R) = Bbar(R) + a_1 e_1(R) + a_2 e_2(R),
-  with the template Bbar and the PCA modes e_k calibrated on PICCOLO, and two amplitudes a_k per
-  (z, lambda) bin.
+  with the template Bbar, the PCA modes e_k and two amplitudes a_k per (z, lambda) bin calibrated
+  on PICCOLO. The amplitudes are fixed to their calibration (their statistical uncertainty is
+  added to the g_t covariance), and the systematic uncertainty of the calibration is described by
+  3 parameters shared by all the bins (as B_SYS in the DR1 chains):
+      B(R) - 1 = (1 + B_s) [Bbar(R) - 1 + sum_k (a_k + B_da<k>) e_k(R)].
 
 Free parameters (see PARAMETERS below for fiducial values and priors)
 ---------------------------------------------------------------------
 * cosmology          : Omega_m, sigma8 (h, Omega_b, n_s, m_nu fixed);
 * richness-mass (HOD): log10_M1, alpha, epsilon, sigma_lnltr (M_min fixed);
 * miscentring        : misc_f, misc_s1, misc_s2 (comoving Mpc/h);
-* PCA amplitudes     : a1_z<i>_l<j>, a2_z<i>_l<j> (2 per bin, 32 for 4 x 4 bins).
-The fiducial values are the true values of the PICCOLO mock (cosmology and richness-mass relation)
-and the calibrations of the A1900 setup (miscentring, PCA amplitudes). Cosmology and HOD parameters
-have the uniform priors of the A1900 chains; miscentring and PCA amplitudes have Gaussian priors
-centred on their calibration (as nuisance parameters).
+* B(R) systematics   : B_s, B_da1, B_da2.
+12 parameters in total. The fiducial values are the true values of the PICCOLO mock (cosmology and
+richness-mass relation), the calibration of the A1900 setup (miscentring) and 0 (B systematics).
+Cosmology and HOD parameters have the uniform priors of the A1900 chains; miscentring and B
+systematics have Gaussian priors (nuisance parameters).
 
 Usage
 -----
@@ -62,8 +65,8 @@ Usage
     # 200 noise realisations at the fiducial point (e.g. for coverage tests of the posteriors)
     python generate_cluster_mocks.py --mode fiducial --n-real 200 --output mocks_fiducial.npz
 
-    # some parameters fixed to the fiducial (names or groups: cosmo, hod, misc, pca)
-    python generate_cluster_mocks.py --n-points 1000 --fix misc,pca --output mocks_fixed_nuis.npz
+    # some parameters fixed to the fiducial (names or groups: cosmo, hod, misc, bsys)
+    python generate_cluster_mocks.py --n-points 1000 --fix misc,bsys --output mocks_fixed_nuis.npz
 
     # your own parameter points (an .npy file with shape (n_points, n_params), in the order of
     # --list-params; or an .npz file with one array per parameter name, missing ones at the fiducial)
@@ -93,8 +96,8 @@ Requirements
 cloelib at tag sbi-mocks-v1 (``pip install -e .`` in the repository), numpy, scipy, jax,
 cosmopower_jax, camb. The calibration file ``calibration_A1900_apLtr_perc.npz`` must be in the
 directory of this script (or given with --calibration).
-Cost: ~5-30 s per point and process (covariances included, depending on the machine load), dominated by
-the lensing model (miscentred profiles).
+Cost: ~4 s per point and process on an idle CPU core (model ~2 s, half of it the miscentred profiles;
+covariances ~2 s, mostly the g_t one), plus ~10 s of start-up per process (emulators, JAX).
 """
 
 import os
@@ -175,9 +178,13 @@ PARAMETERS = {
     "misc_f": (None, ("gauss", None, 0.08)),
     "misc_s1": (None, ("gauss", None, "20%")),
     "misc_s2": (None, ("gauss", None, "20%")),
-    # PCA amplitudes a1_z<i>_l<j>, a2_z<i>_l<j>: added by load_calibration, with a bivariate Gaussian
-    # prior per bin (mean and covariance of the calibration, i.e. the statistical uncertainty of
-    # the B(R) calibration on PICCOLO)
+    # systematic uncertainty of the B(R) calibration, shared by all the (z, lambda) bins (see the module
+    # docstring), as the B_SYS chains: Gaussian priors of mean 0, width 0.25 on the scale B_s and
+    # 0.25 x (rms over the bins of the calibrated amplitudes a_k) on the amplitude shifts B_da<k>
+    # (the latter filled in by load_calibration)
+    "B_s": (0.0, ("gauss", 0.0, 0.25)),
+    "B_da1": (0.0, ("gauss", 0.0, None)),
+    "B_da2": (0.0, ("gauss", 0.0, None)),
 }
 # fixed parameters of the richness-mass relation
 HOD_FIXED = dict(Mmin=10.0**11.073, z_piv=1.25)
@@ -186,7 +193,7 @@ PARAMETER_GROUPS = {
     "cosmo": ["Omega_m", "sigma8"],
     "hod": ["log10_M1", "alpha", "epsilon", "sigma_lnltr"],
     "misc": ["misc_f", "misc_s1", "misc_s2"],
-    "pca": [],  # filled in by load_calibration
+    "bsys": ["B_s", "B_da1", "B_da2"],
 }
 
 ########################################################################################################
@@ -249,11 +256,6 @@ class Calibration:
         self.n_pca = self.pca_modes.shape[0]
 
 
-def pca_name(k, i, j):
-    """name of the PCA amplitude of mode k (1-based) in the bin (z_ob i, lambda_ob j)"""
-    return f"a{k}_z{i}_l{j}"
-
-
 def load_calibration(path):
     """Read the calibration file and complete PARAMETERS / PARAMETER_GROUPS with its values."""
     cal = Calibration(path)
@@ -262,14 +264,11 @@ def load_calibration(path):
         if isinstance(sig, str):  # relative width, e.g. "20%"
             sig = float(sig.rstrip("%")) / 100.0 * value
         PARAMETERS[name] = (float(value), (kind, float(value), sig))
-    PARAMETER_GROUPS["pca"] = []
-    for i in range(cal.n_z):
-        for j in range(cal.n_l):
-            for k in range(cal.n_pca):
-                name = pca_name(k + 1, i, j)
-                # prior: "pca" = bivariate Gaussian of the bin (mean pca_amp[i, j], cov pca_amp_cov[i, j])
-                PARAMETERS[name] = (float(cal.pca_amp[i, j, k]), ("pca", i, j, k))
-                PARAMETER_GROUPS["pca"].append(name)
+    if cal.n_pca != 2:
+        raise ValueError(f"the calibration has {cal.n_pca} PCA modes, the script expects 2 (B_da1, B_da2)")
+    rms = np.sqrt(np.mean(cal.pca_amp**2, axis=(0, 1)))  # rms of the calibrated amplitudes over the bins
+    for k in range(cal.n_pca):
+        PARAMETERS[f"B_da{k + 1}"] = (0.0, ("gauss", 0.0, 0.25 * float(rms[k])))
     return cal
 
 
@@ -297,6 +296,8 @@ def sample_prior(n, rng, cal, fixed=()):
         prior = PARAMETERS[p][1]
         if prior[0] == "uniform":
             theta[:, col[p]] = rng.uniform(prior[1], prior[2], n)
+        elif p in PARAMETER_GROUPS["bsys"]:  # Gaussian, not truncated
+            theta[:, col[p]] = rng.normal(prior[1], prior[2], n)
     # miscentring: Gaussian, truncated to 0 < f < 1 and 0 < s_1 < s_2 (rejection sampling)
     free_misc = [p for p in PARAMETER_GROUPS["misc"] if p not in fixed]
     todo = np.ones(n, bool)
@@ -307,17 +308,6 @@ def sample_prior(n, rng, cal, fixed=()):
             theta[todo, col[p]] = rng.normal(mu, sig, m)
         f, s1, s2 = (theta[:, col[p]] for p in PARAMETER_GROUPS["misc"])
         todo = ~((f > 0) & (f < 1) & (s1 > 0) & (s1 < s2))
-    # PCA amplitudes: bivariate Gaussian in each bin (only if both amplitudes of the bin are free)
-    for i in range(cal.n_z):
-        for j in range(cal.n_l):
-            cols = [col[pca_name(k + 1, i, j)] for k in range(cal.n_pca)]
-            free_k = [c for c, k in zip(cols, range(cal.n_pca)) if names[c] not in fixed]
-            if not free_k:
-                continue
-            draw = rng.multivariate_normal(cal.pca_amp[i, j], cal.pca_amp_cov[i, j], n)
-            for k, c in enumerate(cols):
-                if names[c] not in fixed:
-                    theta[:, c] = draw[:, k]
     return theta
 
 
@@ -326,10 +316,10 @@ def print_parameters(fixed=()):
     for p, (fid, prior) in PARAMETERS.items():
         if prior[0] == "uniform":
             txt = f"U({prior[1]:g}, {prior[2]:g})"
-        elif prior[0] == "gauss":
-            txt = f"N({prior[1]:.4g}, {prior[2]:.3g}) truncated"
         else:
-            txt = f"bivariate N (calibration of bin z{prior[1]} l{prior[2]})"
+            txt = f"N({prior[1]:.4g}, {prior[2]:.3g})"
+            if p in PARAMETER_GROUPS["misc"]:
+                txt += " truncated (0 < f < 1, 0 < s1 < s2)"
         print(f"{p:14s} {fid:10.4f}  {txt}{'  [fixed]' if p in fixed else ''}")
 
 
@@ -462,11 +452,10 @@ class ClusterModel:
             integ_lambda_true_arr=SETTINGS["Lambda"], integ_ztrue_arr=ztrue, area=self.area,
         )
 
-    def __call__(self, theta, with_covariance=True, pca_fixed=False):
+    def __call__(self, theta, with_covariance=True):
         """theta: values of all the parameters (order of PARAMETERS).
         Returns nc (n_z, n_l), gt (n_z, n_l, n_R) and, with_covariance, cov_nc (n_z n_l, n_z n_l) and
-        cov_gt (n_z, n_l n_R, n_l n_R). pca_fixed: the PCA amplitudes are not varied, so their
-        calibration uncertainty is added to cov_gt (as in the A1900 chains)."""
+        cov_gt (n_z, n_l n_R, n_l n_R)."""
         cal = self.cal
         p = dict(zip(self.names, theta))
         zob, lob, re = cal.z_obs_edges, cal.lambda_obs_edges, cal.r_edges
@@ -521,14 +510,18 @@ class ClusterModel:
         )
         f, s1, s2 = p["misc_f"], p["misc_s1"], p["misc_s2"]
         mixture = ((f, s1), (1.0 - f, s2))
-        amp = np.array(
-            [[[p[pca_name(k + 1, i, j)] for k in range(cal.n_pca)] for j in range(cal.n_l)] for i in range(cal.n_z)]
-        )
+        # optical selection bias, with the systematic parameters B_s, B_da<k>:
+        #     B - 1 = (1 + B_s) [Bbar - 1 + sum_k (a_k + B_da<k>) e_k]
+        # (a_k: calibrated amplitudes of each bin, fixed)
+        s_b = p["B_s"]
+        da = np.array([p[f"B_da{k + 1}"] for k in range(cal.n_pca)])
+        b_mean = 1.0 + (1.0 + s_b) * (cal.pca_Bbar - 1.0)
+        amp = (1.0 + s_b) * (cal.pca_amp + da)  # (n_z, n_l, n_pca)
         # profile without the optical selection bias correction, then times B(R) (same as passing
-        # opt_sel_bias_pca=(Bbar, modes, amp) to get_gt; the uncorrected profile is also needed for the
-        # PCA covariance below)
+        # opt_sel_bias_pca=(b_mean, modes, amp) to get_gt; the uncorrected profile is also needed for
+        # the PCA covariance below)
         gt_no_b = weak_lensing.get_gt(zob, lob, re, miscentering_params=mixture, comoving_radii=True)
-        gt = gt_no_b * weak_lensing.optical_selection_bias_pca_correction(cal.pca_Bbar, cal.pca_modes, amp)
+        gt = gt_no_b * weak_lensing.optical_selection_bias_pca_correction(b_mean, cal.pca_modes, amp)
         if not with_covariance:
             return nc, gt
 
@@ -552,13 +545,13 @@ class ClusterModel:
             z_mid = 0.5 * (zob[i] + zob[i + 1])
             c = cov_obj.get_gt_covariance(zob[i : i + 2], lob, re / (1.0 + z_mid))[0, 0]  # (l, l, r, r)
             cov_gt[i] = c.transpose(0, 2, 1, 3).reshape(n_lr, n_lr)
-        if pca_fixed:
-            # calibration uncertainty of the PCA amplitudes, with the profile without B (as the A1900 chains)
-            c = weak_lensing.optical_selection_bias_pca_covariance(gt_no_b, cal.pca_modes, cal.pca_amp_cov)
-            for i in range(cal.n_z):
-                for j in range(cal.n_l):
-                    s = slice(j * cal.n_r, (j + 1) * cal.n_r)
-                    cov_gt[i, s, s] += c[i, i, j, j]
+        # g_t: statistical uncertainty of the calibrated amplitudes a_k (fixed in the model), propagated
+        # with the profile without B, added to each (z, lambda) block (as the A1900 and B_SYS chains)
+        c = weak_lensing.optical_selection_bias_pca_covariance(gt_no_b, cal.pca_modes, cal.pca_amp_cov)
+        for i in range(cal.n_z):
+            for j in range(cal.n_l):
+                s = slice(j * cal.n_r, (j + 1) * cal.n_r)
+                cov_gt[i, s, s] += c[i, i, j, j]
         return nc, gt, cov_nc, cov_gt
 
 
@@ -625,7 +618,7 @@ def _run_point(task):
     cal = model.cal
     t0 = time.time()
     try:
-        nc, gt, cov_nc, cov_gt = model(theta, with_covariance=True, pca_fixed=cfg["pca_fixed"])
+        nc, gt, cov_nc, cov_gt = model(theta, with_covariance=True)
         rng = np.random.default_rng(seed)
         nc_r, gt_r = add_noise(nc, gt, cov_nc, cov_gt, cfg["n_real"], rng, cfg["nc_noise"])
         ok = bool(np.all(np.isfinite(nc)) and np.all(np.isfinite(gt)))
@@ -727,17 +720,14 @@ def main():
         theta = _load_theta_file(args.theta_file)
     n_points = theta.shape[0]
     seeds = np.array([s.generate_state(1)[0] for s in seq_noise.spawn(n_points)], dtype=np.uint32)
-    # in mode prior the PCA amplitudes are free unless fixed; their calibration uncertainty is
-    # added to the g_t covariance only when they are not varied (fiducial mode or --fix pca)
-    pca_fixed = args.mode == "fiducial" or set(PARAMETER_GROUPS["pca"]) <= fixed
-    free = np.array([args.mode == "prior" and p not in fixed for p in names])
+    free =np.array([args.mode == "prior" and p not in fixed for p in names])
 
     base = dict(
         param_names=np.array(names), free=free, theta=theta, seed=seeds,
         fiducial=np.array([PARAMETERS[p][0] for p in names]),
         z_obs_edges=cal.z_obs_edges, lambda_obs_edges=cal.lambda_obs_edges, r_edges_comoving=cal.r_edges,
         area=args.area, n_eff=args.n_eff, sigma_e=args.sigma_e, nc_noise=args.nc_noise, mode=args.mode,
-        pca_cov_in_gt_noise=pca_fixed, misc_profile=args.misc_profile, master_seed=args.seed,
+        misc_profile=args.misc_profile, master_seed=args.seed,
         piccolo_2halo=PICCOLO_2HALO, save_cov=args.save_cov, command=" ".join(sys.argv),
     )
     results = {}
@@ -752,7 +742,7 @@ def main():
         print(f"Resuming: {len(results)} of {n_points} points already in {args.output}")
 
     cfg = dict(calibration=args.calibration, area=args.area, n_eff=args.n_eff, sigma_e=args.sigma_e,
-               misc_profile=args.misc_profile, n_real=args.n_real, nc_noise=args.nc_noise, pca_fixed=pca_fixed)
+               misc_profile=args.misc_profile, n_real=args.n_real, nc_noise=args.nc_noise)
     tasks = [(i, theta[i], int(seeds[i])) for i in range(n_points) if i not in results]
     print(f"{len(tasks)} points x {args.n_real} realisations, {args.ncpu} processes -> {args.output}", flush=True)
 

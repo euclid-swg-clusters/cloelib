@@ -42,25 +42,31 @@ cd scripts/cluster_sbi_mocks
 python generate_cluster_mocks.py --list-params           # parameters, fiducial values, priors
 python generate_cluster_mocks.py --n-points 1000 --ncpu 8 --output mocks_prior.npz
 python generate_cluster_mocks.py --mode fiducial --n-real 200 --output mocks_fiducial.npz
-python generate_cluster_mocks.py --n-points 1000 --fix misc,pca --output mocks_fixed_nuisances.npz
+python generate_cluster_mocks.py --n-points 1000 --fix misc,bsys --output mocks_fixed_nuisances.npz
 python generate_cluster_mocks.py --help                   # all the options
 ```
 
-There are 41 free parameters:
+There are 12 free parameters:
 
 | Group | Parameters | Prior |
 |---|---|---|
 | Cosmology | Ω_m, σ_8 | uniform |
 | Richness–mass relation | log10 M_1, α, ε, σ_lnλ | uniform |
-| Miscentring | f, s_1, s_2 | Gaussian |
-| PCA amplitudes | a_1, a_2 per bin (32 in all) | Gaussian, from the PICCOLO calibration |
+| Miscentring | f, s_1, s_2 | Gaussian, truncated |
+| Optical selection bias systematics | B_s, B_da1, B_da2 | Gaussian, mean 0 |
 
-The fiducial values are the PICCOLO truth and calibrations. `--fix` takes parameter names or groups
-(`cosmo`, `hod`, `misc`, `pca`) and keeps them at their fiducial values. When the PCA amplitudes are
-fixed, their calibration uncertainty is added to the g_t noise.
+The fiducial values are the PICCOLO truth and calibrations (0 for the B systematics). `--fix` takes
+parameter names or groups (`cosmo`, `hod`, `misc`, `bsys`) and keeps them at their fiducial values.
 
-Cost: about 5–30 s per point and process, depending on machine load. Most of it is the lensing
-model. The output is written every `--checkpoint` points. Use `--resume` to continue an interrupted
+The optical selection bias correction is B(R) = B̄(R) + Σ_k a_k e_k(R), with two PCA amplitudes a_k
+per bin. The amplitudes are fixed to their PICCOLO calibration, and their statistical uncertainty is
+added to the g_t noise. The systematic uncertainty of the calibration is described by 3 parameters
+shared by all the bins:
+
+B(R) − 1 = (1 + B_s) [B̄(R) − 1 + Σ_k (a_k + B_da_k) e_k(R)]
+
+Cost: about 4 s per point and process on an idle CPU core, plus ~10 s of start-up per process. The
+model takes ~2 s (half of it the miscentred profiles) and the covariances ~2 s. The output is written every `--checkpoint` points. Use `--resume` to continue an interrupted
 run, or to extend it with a larger `--n-points`: the parameter points and the noise are reproducible
 from `--seed`.
 
