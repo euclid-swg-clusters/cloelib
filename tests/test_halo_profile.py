@@ -1,7 +1,7 @@
 # import jax.numpy as np
 
 import numpy as np
-from numpy.testing import assert_allclose
+from numpy.testing import assert_allclose, assert_equal
 
 from cloelib.cosmology.camb_cosmology import CAMBBackground, CAMBLinearPerturbations
 from cloelib.observables.halos.halo_abundance import CastroHaloAbundance
@@ -86,14 +86,12 @@ def test_array_shapes():
 
 
 def _test_profile(profile, reference_vals):
-
     R_test = np.array([1])
     z_test = np.linspace(0.01, 0.5, 4)
     M_test = np.array([5e14])
     c_test = 4.0
     z_sources_test = np.linspace(0.6, 1, 5)
     mean_z_cl_test = np.linspace(0.2, 1.0, 4)
-    HS = _get_halo_model_properties()
     castro = _get_castro()
     halo_bias = castro.bias(z_test, M_test)
 
@@ -102,13 +100,25 @@ def _test_profile(profile, reference_vals):
         profile.sigma_crit(z_test, z_sources_test)[0],
         **reference_vals["sigma_crit"],
     )
-    idx = np.array([profile._get_tomo_bin_index(mean_z_cl_test[i]) for i in range(mean_z_cl_test.size)])
+    idx = np.array(
+        [
+            profile._get_tomo_bin_index(mean_z_cl_test[i])
+            for i in range(mean_z_cl_test.size)
+        ]
+    )
     print("    n_zs_norM")
-    n_zs_norMs = np.array([profile.n_zs_norM(mean_z_cl_test[i],idx[i]) for i in range(mean_z_cl_test.size)])
-    assert_allclose(n_zs_norMs, **reference_vals["n_zs_norM"],atol=1.0e-5)
+    n_zs_norMs = np.array(
+        [
+            profile.n_zs_norM(mean_z_cl_test[i], idx[i])
+            for i in range(mean_z_cl_test.size)
+        ]
+    )
+    assert_allclose(n_zs_norMs, **reference_vals["n_zs_norM"], atol=1.0e-5)
     print("    n_zs")
-    nzs = np.array([profile.n_zs(z_sources_test,idx[i]) for i in range(mean_z_cl_test.size)])
-    assert_allclose(nzs, **reference_vals["n_zs"],atol=1.0e-5)
+    nzs = np.array(
+        [profile.n_zs(z_sources_test, idx[i]) for i in range(mean_z_cl_test.size)]
+    )
+    assert_allclose(nzs, **reference_vals["n_zs"], atol=1.0e-5)
     print("    sigma_crit_inv_eff without sources behind the cluster")
     # no sources for z + Delta_z >= zs_max (Delta_z = 0.05): zero, not NaN
     z_lens_edge = np.array([0.5, profile.zs_max - 0.05, profile.zs_max - 0.03])
@@ -151,7 +161,6 @@ def _test_profile(profile, reference_vals):
 
 
 def test_profiles():
-
     # Profiles
     print("# Profiles ")
 
@@ -173,12 +182,17 @@ def test_profiles():
             ],
             "rtol": 1e-5,
         },
-        "n_zs_norM": {"desired": [1.12513478, 1.50243006, 1.28488508, 1.594103  ], "rtol": 1e-5},
+        "n_zs_norM": {
+            "desired": [1.12513478, 1.50243006, 1.28488508, 1.594103],
+            "rtol": 1e-5,
+        },
         "n_zs": {
-            "desired": [[0.83347014, 0.7820134 , 0.72356751, 0.66030692, 0.59431415],
-       [0.83347014, 0.7820134 , 0.72356751, 0.66030692, 0.59431415],
-       [0.29190244, 0.5992073 , 0.84143889, 0.92745609, 0.9132132 ],
-       [0.08161356, 0.18759727, 0.34873945, 0.53502114, 0.69604214]],
+            "desired": [
+                [0.83347014, 0.7820134, 0.72356751, 0.66030692, 0.59431415],
+                [0.83347014, 0.7820134, 0.72356751, 0.66030692, 0.59431415],
+                [0.29190244, 0.5992073, 0.84143889, 0.92745609, 0.9132132],
+                [0.08161356, 0.18759727, 0.34873945, 0.53502114, 0.69604214],
+            ],
             "rtol": 1e-5,
         },
         "surface_mass_density": {
