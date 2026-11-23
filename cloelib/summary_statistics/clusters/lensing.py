@@ -9,11 +9,10 @@
 # General imports
 import numpy as np
 
+from cloelib.observables.halos.halo_abundance import CastroHaloAbundance
 
 # cloelib imports
-from cloelib.observables.clusters.halo_abundance import CastroHaloAbundance
-from cloelib.observables.clusters.halo_profile import HaloProfile
-from cloelib.observables.clusters.selection_function import SelectionFunction
+from cloelib.observables.halos.halo_profile import HaloProfile
 from cloelib.summary_statistics.clusters.statistics_modeling import (
     ClusterStatisticsModeling,
 )
@@ -27,7 +26,6 @@ class ClusterWeakLensing:
         cluster_statitstics_modeling: ClusterStatisticsModeling,
         profile: HaloProfile,
         halo_concentration: float,
-        selection_function: SelectionFunction,
     ):
         """
         Initializes the cluster profile lensing
@@ -41,12 +39,10 @@ class ClusterWeakLensing:
             Halo weak lensing radial profile object
         halo_concentration : float
             Halo concentration
-        selection_function : SelectionFunction
-            Selection function object
         """
         halo_abundance = cluster_statitstics_modeling.halo_abundance
         Delta_abundance = halo_abundance.overdensity_type
-        Delta_profile = profile.core.overdensity_type
+        Delta_profile = profile.overdensity_type
         if isinstance(halo_abundance, CastroHaloAbundance) and Delta_profile != "vir":
             raise ValueError(
                 f"If the Castro HMF is used, only virial overdensities can be considered. The current overdensity in the profile modeling is {Delta_profile}."
@@ -62,7 +58,6 @@ class ClusterWeakLensing:
 
         # observable objects
         self.profile = profile
-        self.selection_function = selection_function
 
         # internal values
         self.halo_concentration = halo_concentration
@@ -102,11 +97,11 @@ class ClusterWeakLensing:
 
         # integral of P(z_obs|lambda_obs, z) on z_obs bins : (z_obs, lambda_obs, ztrue)
         window_z_obs = self.cluster_statitstics_modeling.window_z_observed(
-            self.selection_function, z_obs_edges, lambda_obs_edges
+            z_obs_edges, lambda_obs_edges
         )
         # integral of P(lambda_obs|M, z) on lambda_obs bins : (lambda_obs, M, ztrue)
         window_lambda_obs = self.cluster_statitstics_modeling.window_richness_observed(
-            self.selection_function, lambda_obs_edges
+            lambda_obs_edges
         )
         # cluster counts : (z_obs, lambda_obs)
         cluster_counts = self.cluster_statitstics_modeling.integrate_probe_function_in_redshift(
@@ -221,7 +216,7 @@ class ClusterWeakLensing:
         for ind_z in range(z_obs_edges_size):
             idx = self.profile.core._get_tomo_bin_index(z_obs_mean[ind_z])
             effective_inverse_critical_surface_mass_density[ind_z] = (
-                self.profile.core.sigma_crit_inv_eff(
+                self.profile.sigma_crit_inv_eff(
                     self.cluster_statitstics_modeling.tabulated_integrands["ztrue"],
                     idx,
                 )

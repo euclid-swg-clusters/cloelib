@@ -12,7 +12,8 @@ from scipy.integrate import simpson
 
 # cloelib imports
 from cloelib.cosmology import derived_cosmology
-from cloelib.observables.clusters.halo_abundance import HaloAbundance
+from cloelib.observables.halos.halo_abundance import HaloAbundance
+from cloelib.observables.halos.selection_function import SelectionFunction
 
 # import jax
 
@@ -29,7 +30,6 @@ class ClusterStatisticsModeling:
             * M (numpy.ndarray) : Values of mass to be used in integrations
             * lambda_true (numpy.ndarray) : Values of true richness to be used in integrations
             * ztrue (numpy.ndarray) : Values of true redshift to be used in integrations
-            * PDF_mass_richness_scaling (numpy.ndarray) : Values for P(lambda_true|M, ztrue)
             * dv/dz(ztrue) (numpy.ndarray) : Values for volume element at each redshift
             * dn/dM(ztrue,M) (numpy.ndarray) : Values for the halo mass function dn/dmdz
             * bias(ztrue,M) (numpy.ndarray) : Values for the halo bias halo_bias
@@ -39,10 +39,11 @@ class ClusterStatisticsModeling:
     def __init__(
         self,
         halo_abundance: HaloAbundance,
+        selection_function: SelectionFunction,
         integ_k_arr: np.ndarray,
         integ_mass_arr: np.ndarray,
-        integ_lambda_true_arr: np.ndarray,
-        integ_ztrue_arr: np.ndarray,
+        integ_lambda_true_arr: np.ndarray | None = None,
+        integ_ztrue_arr: np.ndarray | None = None,
         area: float = 10313,
     ):
         """
@@ -52,23 +53,47 @@ class ClusterStatisticsModeling:
         ----------
         HaloAbundance : HaloAbundance
             Halo mass function and bias object
+        selection_function : SelectionFunction
+            Selection function object
         integ_k_arr : numpy.ndarray
             Values of k to be used in integrations, stored in tabulated_integrands
         integ_mass_arr : numpy.ndarray
             Values of mass to be used in integrations, stored in tabulated_integrands
         integ_lambda_true_arr : numpy.ndarray
-            Values of true richness to be used in integrations, stored in tabulated_integrands
+            Values of true richness to be used in integrations, stored in tabulated_integrands.
+            Should be None when a NumericalSelectionFunction is passed as the internal
+            lambda_true stored in NumericalSelectionFunction will be used.
         integ_ztrue_arr : numpy.ndarray
-            Values of true redshift to be used in integrations, stored in tabulated_integrands
+            Values of true redshift to be used in integrations, stored in tabulated_integrands.
+            Should be None when a NumericalSelectionFunction is passed as the internal
+            lambda_true stored in NumericalSelectionFunction will be used.
         area : float
             Effective area of the survey in deg2.
         """
         # observable objects
+        self.area = area
         self.halo_abundance = halo_abundance
+        self.selection_function = selection_function
+
+        # check the consistency between the selection function and the integration arrays
+        self._numerical_sf = hasattr(selection_function, "_sel_cl_data")
+        if self._numerical_sf:
+            if any(arr is not None for arr in (integ_lambda_true_arr, integ_ztrue_arr)):
+                raise ValueError(
+                    "integ_lambda_true_arr and integ_ztrue_arr should be None"
+                    " when type(selection_function) == NumericalSelectionFunction."
+                )
+            integ_lambda_true_arr = selection_function.lambda_true
+            integ_ztrue_arr = selection_function.z_true
+        elif any(arr is None for arr in (integ_lambda_true_arr, integ_ztrue_arr)):
+            raise ValueError(
+                "integ_lambda_true_arr and integ_ztrue_arr should be provided"
+                " when type(selection_function) != NumericalSelectionFunction."
+            )
 
         # check if the integration points lie within the interpolation ranges
-        if self.matter_statistics.interpolate_pk:
-            z_knots, k_knots = self.matter_statistics.Pk_interp_cb.get_knots()
+        if self.halo_model_properties.interpolate_pk:
+            z_knots, k_knots = self.halo_model_properties.Pk_interp_cb.get_knots()
             if (
                 integ_ztrue_arr.min() <= z_knots.min()
                 or integ_ztrue_arr.max() >= z_knots.max()
@@ -81,8 +106,8 @@ class ClusterStatisticsModeling:
                     "integ_k_arr points lie outside the P(k,z) interpolation range."
                 )
 
-        if self.matter_statistics.interpolate_da:
-            z_knots = self.matter_statistics.da_interp.get_knots()
+        if self.halo_model_properties.interpolate_da:
+            z_knots = self.halo_model_properties.da_interp.get_knots()
             if (
                 integ_ztrue_arr.min() <= z_knots.min()
                 or integ_ztrue_arr.max() >= z_knots.max()
@@ -99,7 +124,7 @@ class ClusterStatisticsModeling:
             "ztrue": integ_ztrue_arr,  # true redshift array
             # volume element at each point of z array
             "dv/dz(ztrue)": derived_cosmology.dV_dzdO(
-                self.matter_statistics.perturbations.background,
+                self.halo_model_properties.perturbations.background,
                 integ_ztrue_arr,
                 hubble_units=True,
             )
@@ -117,14 +142,14 @@ class ClusterStatisticsModeling:
         }
 
     @property
-    def matter_statistics(self):
-        return self.halo_abundance.core.matter_statistics
+    def halo_model_properties(self):
+        return self.halo_abundance.halo_model_properties
 
     # ----------------------------
     # cluster statistics functions
     # ----------------------------
 
-    def window_z_observed(self, selection_function, z_obs_edges, lambda_obs_edges):
+    def window_z_observed(self, z_obs_edges, lambda_obs_edges):
         r"""Compute the window function of each observed redshift bin, given by:
 
         ..math:
@@ -132,8 +157,6 @@ class ClusterStatisticsModeling:
 
         Parameters
         ---------
-        selection_function : SelectionFunction
-            Selection function object
         z_obs_edges : numpy.ndarray
             Edges of redshift bins for the integration.
         lambda_obs_edges : numpy.ndarray
@@ -146,14 +169,18 @@ class ClusterStatisticsModeling:
             where (ztrue) are the values in self.tabulated_integrands.
             Dimensions: (z_obs_edges, lambda_obs_edges, ztrue).
         """
-        return selection_function.window_z_observed(
-            z_obs_edges,
-            lambda_obs_edges,
-            self.tabulated_integrands["ztrue"],
-            self.tabulated_integrands["lambda_true"],
-        )
+        kwargs = {
+            "z_obs_edges": z_obs_edges,
+            "lambda_obs_edges": lambda_obs_edges,
+            "z_true": self.tabulated_integrands["ztrue"],
+            "lambda_true": self.tabulated_integrands["lambda_true"],
+        }
+        if self._numerical_sf:
+            kwargs.pop("z_true")
+            kwargs.pop("lambda_true")
+        return self.selection_function.window_z_observed(**kwargs)
 
-    def window_richness_observed(self, selection_function, lambda_obs_edges):
+    def window_richness_observed(self, lambda_obs_edges):
         r"""Compute the window function of each observed richness bin, given by:
 
         ..math:
@@ -161,8 +188,6 @@ class ClusterStatisticsModeling:
 
         Parameters
         ----------
-        selection_function : SelectionFunction
-            Selection function object
         lambda_obs_edges : numpy.ndarray
             Edges of richness bins for the integration.
 
@@ -173,13 +198,16 @@ class ClusterStatisticsModeling:
             where (M, ztrue) are the values in self.tabulated_integrands.
             Dimensions: (lambda_obs_edges, ztrue, M).
         """
-
-        return selection_function.window_richness_observed(
-            lambda_obs_edges,
-            self.tabulated_integrands["ztrue"],
-            self.tabulated_integrands["M"],
-            self.tabulated_integrands["lambda_true"],
-        )
+        kwargs = {
+            "lambda_obs_edges": lambda_obs_edges,
+            "mass": self.tabulated_integrands["M"],
+            "z_true": self.tabulated_integrands["ztrue"],
+            "lambda_true": self.tabulated_integrands["lambda_true"],
+        }
+        if self._numerical_sf:
+            kwargs.pop("z_true")
+            kwargs.pop("lambda_true")
+        return self.selection_function.window_richness_observed(**kwargs)
 
     # ---------------------
     # integration functions
