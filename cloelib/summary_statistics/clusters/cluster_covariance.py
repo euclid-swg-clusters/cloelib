@@ -124,7 +124,7 @@ class ClusterCovariance:
             return self._get_NC_covariance(
                 z_obs_edges,
                 prediction,
-                intermediates["window_lambda_obs"],
+                intermediates["window_z_lambda_obs"],
                 intermediates["window_z_obs"],
             )
         if "pk0_mean_values" not in intermediates:
@@ -280,9 +280,7 @@ class ClusterCovariance:
             spatial_cov[: (ind_z + 1), ind_z] = spatial_cov[ind_z, : (ind_z + 1)]
         return spatial_cov
 
-    def _get_NC_covariance(
-        self, z_obs_edges, cluster_counts, window_lambda_obs, window_z_obs
-    ):
+    def _get_NC_covariance(self, z_obs_edges, cluster_counts, window_z_lambda_obs):
         """Computes theoretical covariance for cluster counts, including shot noise and sample covariance
 
         Parameters
@@ -291,14 +289,8 @@ class ClusterCovariance:
             Edges of redshift bins for the integration.
         cluster_counts : numpy.ndarray
             Number counts in redshift and richness bins
-        window_lambda_obs : numpy.ndarray
-            Integral of P(lamda_obs|M, ztrue) in lambda_obs bins.
-            Dimensions: (lambda_obs, ztrue, M) with (ztrue, M) in cluster_statitstics_modeling.tabulated_integrands.
-            Is in the intermediate_integration_products output of get_NC.
-        window_z_obs : numpy.ndarray
-            Integral of P(z_obs|lambda_obs, ztrue) in z_obs bins.
-            Dimensions: (z_obs, lambda_obs, ztrue) with (ztrue) in cluster_statitstics_modeling.tabulated_integrands.
-            Is in the intermediate_integration_products output of get_NC.
+        window_z_lambda_obs : numpy.ndarray
+            P(lamda_obs_bin,z_obs_bin|M, ztrue)
 
         Returns
         -------
@@ -313,12 +305,11 @@ class ClusterCovariance:
         # integral of P(lambda_obs|M, z)*dn/dM*bias on lambda_obs bins and mass : (lambda_obs, ztrue)
         # cluster integrated bias : (z_obs, lambda_obs)
         halo_bias_mean_values = self.cluster_statitstics_modeling.integrate_probe_function_in_redshift(
-            # integral of P(lambda_obs|M, z)*dn/dM*bias on lambda_obs bins and mass : (lambda_obs, ztrue)
+            # integral of P(lambda_obs_bin,z_obs_bin|M, z)*dn/dM on lambda_obs bins and mass : (lambda_obs, ztrue)
             self.cluster_statitstics_modeling.integrate_probe_function_in_mass(
                 self.cluster_statitstics_modeling.tabulated_integrands["bias(ztrue,M)"],
-                window_lambda_obs,
+                window_z_lambda_obs,
             ),
-            window_z_obs,
         )
 
         ####################
