@@ -322,8 +322,7 @@ def get_values(
     t0 = time.time()
     cov_cluster_counts = ClusterCovariance(cluster_counts_statistics).compute(
         z_obs_edges=z_obs_nc_edges,
-        prediction=cluster_counts,
-        intermediates=counts_intermediate_integration_products,
+        lambda_obs_edges=lambda_obs_nc_edges,
     )
     print(f"nc_cov    :  {time.time() - t0:.4f} seconds")
     t0 = time.time()
@@ -344,7 +343,9 @@ def get_values(
     print(f"xi        :  {time.time() - t0:.4f} seconds")
     t0 = time.time()
     cov_cluster_clustering = ClusterCovariance(cluster_clustering_statistics).compute(
-        intermediates=clustering_intermediate_integration_products,
+        z_obs_edges=zed_obs_clustering_edges,
+        lambda_obs_edges=lambda_obs_clustering_edges,
+        radius_edges=radius_clustering_edges,
     )
     print(f"xi_cov    :  {time.time() - t0:.4f} seconds")
     return (
