@@ -40,7 +40,7 @@ class AnalyticSelectionFunction:
         The observed richness PDF is expressed as follows:
 
         ..math:
-        P(\lambda_{\rm ob} | \lambda,z)= (1-f_{\rm prj}) \mathcal{N}(\mu,\sigma) + 
+        P(\lambda_{\rm ob} | \lambda,z)= (1-f_{\rm prj}) \mathcal{N}(\mu,\sigma) +
                 + f_{\rm prj} \frac{\tau}{2} \exp\left[ \frac{\tau}{2} (2\mu + \tau\sigma^2 - 2 \lambda_{\rm ob})\right]
                 {\rm erfc} \left( \frac{\mu +\tau\sigma^2-\lambda_{\rm ob}}{\sqrt{2}\sigma}\right)
 
@@ -66,8 +66,8 @@ class AnalyticSelectionFunction:
         true redshift and a standard deviation expressed as follows:
 
         ..math:
-        \sigma_z(\lambda_{\rm ob}, \lambda, z) = 
-        \varsigma_0 \,\mu(\lambda,z)^{\varsigma_{\rm exp}} 
+        \sigma_z(\lambda_{\rm ob}, \lambda, z) =
+        \varsigma_0 \,\mu(\lambda,z)^{\varsigma_{\rm exp}}
         + \varsigma_z \frac{z}{z_{\rm pivot}} \cdot \frac{\lambda_{\rm ob}
         - \mu(\lambda,z)} {\mu(\lambda,z)}
 
@@ -90,9 +90,9 @@ class AnalyticSelectionFunction:
         tau_lambda_norm: float
             $\tau_0$ in the formula of $\tau$
         tau_lambda_z: float
-            $\tau_z$ in the formula of $\tau$            
+            $\tau_z$ in the formula of $\tau$
         tau_lambda_exponent: float
-            $\tau_{\rm exp}$ in the formula of $\tau$            
+            $\tau_{\rm exp}$ in the formula of $\tau$
         fprj_lambda_norm: float
             $f_{\rm prj,0}$ in the formula of $f_{\rm prj}$
         fprj_lambda_z: float
