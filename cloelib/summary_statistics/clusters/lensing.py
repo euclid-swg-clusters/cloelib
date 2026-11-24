@@ -214,7 +214,7 @@ class ClusterWeakLensing:
             )
         )
         for ind_z in range(z_obs_edges_size):
-            idx = self.profile.core._get_tomo_bin_index(z_obs_mean[ind_z])
+            idx = self.profile._get_tomo_bin_index(z_obs_mean[ind_z])
             effective_inverse_critical_surface_mass_density[ind_z] = (
                 self.profile.sigma_crit_inv_eff(
                     self.cluster_statitstics_modeling.tabulated_integrands["ztrue"],

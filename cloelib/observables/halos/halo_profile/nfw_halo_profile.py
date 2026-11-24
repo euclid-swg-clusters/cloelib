@@ -28,8 +28,6 @@ class NFWHaloProfile(HaloProfileBase):
             If "sum", the 1-halo and 2-halo profile are summed.
             If "max", the maximum between them is considered at each point.
             If "None", the 2-halo is not included. Default is "None".
-        z : array_like, optional
-            Redshift grid for calculations.
         zs_max : float, optional
             Maximum source redshift for lensing calculations.
         """

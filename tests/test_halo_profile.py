@@ -47,9 +47,6 @@ def test_array_shapes():
     _prof_kwargs = dict(
         two_halo="None",
         zs_max=2.0,
-        mean_nz=0.4,
-        sigma_nz=0.3,
-        alpha_nz=0.4,
     )
 
     profile_nfw = NFWHaloProfile(_get_halo_model_properties(), **_prof_kwargs)
@@ -119,6 +116,12 @@ def _test_profile(profile, reference_vals):
         [profile.n_zs(z_sources_test, idx[i]) for i in range(mean_z_cl_test.size)]
     )
     assert_allclose(nzs, **reference_vals["n_zs"], atol=1.0e-5)
+    print("    sigma_crit_inv_eff")
+    z_true_test = np.linspace(0.2, 1.0, 4)
+    assert_allclose(
+        np.array([profile.sigma_crit_inv_eff(z_true_test, i) for i in idx]),
+        **reference_vals["sigma_crit_inv_eff"],
+    )
     print("    sigma_crit_inv_eff without sources behind the cluster")
     # no sources for z + Delta_z >= zs_max (Delta_z = 0.05): zero, not NaN
     z_lens_edge = np.array([0.5, profile.zs_max - 0.05, profile.zs_max - 0.03])
@@ -194,6 +197,17 @@ def test_profiles():
                 [0.08161356, 0.18759727, 0.34873945, 0.53502114, 0.69604214],
             ],
             "rtol": 1e-5,
+        },
+        # external values: independent integration with the same cosmology and n(z),
+        # (z_obs bin, z_true)
+        "sigma_crit_inv_eff": {
+            "desired": [
+                [1.883392e-04, 2.127746e-04, 1.761730e-04, 1.313648e-04],
+                [1.883392e-04, 2.127746e-04, 1.761730e-04, 1.313648e-04],
+                [2.183956e-04, 2.491429e-04, 1.910475e-04, 1.394622e-04],
+                [2.246384e-04, 2.723235e-04, 2.138418e-04, 1.486370e-04],
+            ],
+            "rtol": 1e-4,
         },
         "surface_mass_density": {
             "desired": [57.782346, 60.278322, 62.62685, 64.791899],
@@ -426,9 +440,6 @@ def test_misc_profile():
 
     _prof_kwargs = dict(
         zs_max=2.0,
-        mean_nz=0.4,
-        sigma_nz=0.3,
-        alpha_nz=0.4,
     )
     profile_misc = EmulatorMiscenteredHaloProfile(
         _get_halo_model_properties(), **_prof_kwargs
