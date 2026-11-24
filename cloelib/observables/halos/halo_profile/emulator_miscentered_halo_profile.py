@@ -36,6 +36,18 @@ class EmulatorMiscenteredHaloProfile(HaloProfileBase):
         Overdensity value passed to :class:`HaloProfileCore`.  Default ``200``.
     zs_max : float, optional
         Maximum source redshift for lensing calculations.
+    mean_nz : np.ndarray, optional
+        Location parameter of the skew-normal source redshift distribution of
+        each tomographic bin (see `HaloProfileBase`).
+    sigma_nz : np.ndarray, optional
+        Scale parameter of the skew-normal source redshift distribution of each
+        tomographic bin (see `HaloProfileBase`).
+    alpha_nz : np.ndarray, optional
+        Skewness parameter of the skew-normal source redshift distribution of
+        each tomographic bin (see `HaloProfileBase`).
+    z_mean_tomo_bin : np.ndarray, optional
+        Mean redshift of the sources in each tomographic bin (see
+        `HaloProfileBase`).
 
     Notes
     -----
@@ -60,6 +72,10 @@ class EmulatorMiscenteredHaloProfile(HaloProfileBase):
         overdensity_type: str = "vir",
         overdensity: int = 200,
         zs_max: float = 2.0,
+        mean_nz: np.ndarray | None = None,
+        sigma_nz: np.ndarray | None = None,
+        alpha_nz: np.ndarray | None = None,
+        z_mean_tomo_bin: np.ndarray | None = None,
     ):
         HaloProfileBase.__init__(
             self,
@@ -67,6 +83,10 @@ class EmulatorMiscenteredHaloProfile(HaloProfileBase):
             overdensity_type=overdensity_type,
             overdensity=overdensity,
             zs_max=zs_max,
+            mean_nz=mean_nz,
+            sigma_nz=sigma_nz,
+            alpha_nz=alpha_nz,
+            z_mean_tomo_bin=z_mean_tomo_bin,
         )
 
         self._trunc_fact = None

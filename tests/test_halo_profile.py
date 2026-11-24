@@ -1,7 +1,7 @@
 # import jax.numpy as np
 
 import numpy as np
-from numpy.testing import assert_allclose, assert_equal
+from numpy.testing import assert_allclose, assert_equal, assert_raises
 
 from cloelib.cosmology.camb_cosmology import CAMBBackground, CAMBLinearPerturbations
 from cloelib.observables.halos.halo_abundance import CastroHaloAbundance
@@ -250,6 +250,47 @@ def test_profiles():
     )
     profile_bmo = BMOHaloProfile(_get_halo_model_properties(), **_prof_kwargs)
     _test_profile(profile_bmo, _reference_vals)
+
+
+def test_source_redshift_distribution():
+    print("# Source redshift distribution")
+    halo_model_properties = _get_halo_model_properties()
+    nz_kwargs = dict(
+        mean_nz=np.array([0.3, 0.6]),
+        sigma_nz=np.array([0.5, 0.7]),
+        alpha_nz=np.array([2.0, 3.0]),
+        z_mean_tomo_bin=np.array([0.5, 0.9]),
+    )
+    z = np.array([0.3, 0.5])
+
+    for profile_class in (
+        NFWHaloProfile,
+        BMOHaloProfile,
+        EmulatorMiscenteredHaloProfile,
+    ):
+        print(f"  {profile_class.__name__}")
+        # parameters reach the parent class, that uses them
+        profile = profile_class(halo_model_properties, zs_max=2.0, **nz_kwargs)
+        for name, value in nz_kwargs.items():
+            assert_equal(getattr(profile, name), value)
+        assert profile._get_tomo_bin_index(0.4) == 0
+        assert profile._get_tomo_bin_index(0.6) == 1
+        # same default parameters given explicitly: same result
+        default = profile_class(halo_model_properties, zs_max=2.0)
+        explicit = profile_class(
+            halo_model_properties,
+            zs_max=2.0,
+            **{name: getattr(default, name) for name in nz_kwargs},
+        )
+        assert_equal(
+            explicit.sigma_crit_inv_eff(z, 1), default.sigma_crit_inv_eff(z, 1)
+        )
+        assert np.all(
+            profile.sigma_crit_inv_eff(z, 1) != default.sigma_crit_inv_eff(z, 1)
+        )
+        # inconsistent number of tomographic bins
+        with assert_raises(ValueError):
+            profile_class(halo_model_properties, mean_nz=np.array([0.3, 0.6]))
 
 
 def _test_misc_profile(profile, reference_vals):

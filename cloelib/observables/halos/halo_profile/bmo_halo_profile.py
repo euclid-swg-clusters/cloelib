@@ -14,6 +14,10 @@ class BMOHaloProfile(HaloProfileBase):
         two_halo: str = "None",
         trunc_fact: float = 3.0,
         zs_max: float = 2.0,
+        mean_nz: np.ndarray | None = None,
+        sigma_nz: np.ndarray | None = None,
+        alpha_nz: np.ndarray | None = None,
+        z_mean_tomo_bin: np.ndarray | None = None,
     ):
         """
         BMO profile class.
@@ -31,6 +35,18 @@ class BMOHaloProfile(HaloProfileBase):
             If "None", the 2-halo is not included. Default is "None".
         zs_max : float, optional
             Maximum source redshift for lensing calculations.
+        mean_nz : np.ndarray, optional
+            Location parameter of the skew-normal source redshift distribution of
+            each tomographic bin (see `HaloProfileBase`).
+        sigma_nz : np.ndarray, optional
+            Scale parameter of the skew-normal source redshift distribution of each
+            tomographic bin (see `HaloProfileBase`).
+        alpha_nz : np.ndarray, optional
+            Skewness parameter of the skew-normal source redshift distribution of
+            each tomographic bin (see `HaloProfileBase`).
+        z_mean_tomo_bin : np.ndarray, optional
+            Mean redshift of the sources in each tomographic bin (see
+            `HaloProfileBase`).
         """
         HaloProfileBase.__init__(
             self,
@@ -38,6 +54,10 @@ class BMOHaloProfile(HaloProfileBase):
             overdensity_type=overdensity_type,
             overdensity=overdensity,
             zs_max=zs_max,
+            mean_nz=mean_nz,
+            sigma_nz=sigma_nz,
+            alpha_nz=alpha_nz,
+            z_mean_tomo_bin=z_mean_tomo_bin,
         )
 
         self.two_halo = two_halo

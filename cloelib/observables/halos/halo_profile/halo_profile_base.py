@@ -18,10 +18,10 @@ class HaloProfileBase:
         overdensity_type: str = "vir",
         overdensity: int = 200,
         zs_max: float = 4.0,
-        mean_nz: np.ndarray = None,
-        sigma_nz: np.ndarray = None,
-        alpha_nz: np.ndarray = None,
-        z_mean_tomo_bin: np.ndarray = None,
+        mean_nz: np.ndarray | None = None,
+        sigma_nz: np.ndarray | None = None,
+        alpha_nz: np.ndarray | None = None,
+        z_mean_tomo_bin: np.ndarray | None = None,
     ):
         r"""Parent class computing quantities used in mass profile models.
 
@@ -89,6 +89,20 @@ class HaloProfileBase:
                 [0.52372988, 0.5987506, 0.7179003, 0.90270588, 1.19243611, 1.71458837]
             )
         )
+        sizes = [
+            par.size
+            for par in (
+                self.mean_nz,
+                self.sigma_nz,
+                self.alpha_nz,
+                self.z_mean_tomo_bin,
+            )
+        ]
+        if len(set(sizes)) != 1:
+            raise ValueError(
+                "mean_nz, sigma_nz, alpha_nz and z_mean_tomo_bin must have the same "
+                f"size (number of tomographic bins), got {sizes}."
+            )
 
     @property
     def background(self):
