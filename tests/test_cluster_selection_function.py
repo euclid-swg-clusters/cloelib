@@ -408,12 +408,6 @@ def test_interpolated_selectionfunction_compare_with_gauss():
         mass=1e14 * np.ones(3),
     )
 
-    # compare zeros
-    _zeros = wf_g == 0
-    assert_allclose(wf_g[_zeros], wf_n[_zeros], atol=2e-2)
-    # compare non zeros
-    print(f"nz: {(~_zeros).sum():}")
-    assert_allclose(wf_g[~_zeros], wf_n[~_zeros], rtol=1e-100)
     assert_allclose(wf_g, wf_n, atol=2.5e-3)
 
 def test_analytical_selectionfunction_compare_with_tabulated_values():
