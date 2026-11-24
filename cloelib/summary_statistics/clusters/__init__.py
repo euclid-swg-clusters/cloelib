@@ -1,6 +1,6 @@
-from .cluster_covariance import ClusterCovariance
 from .clustering import ClusterClustering
 from .counts import ClusterCounts
+from .covariance import ClusterCovariance
 from .lensing import ClusterWeakLensing
 from .statistics_modeling import ClusterStatisticsModeling
 
