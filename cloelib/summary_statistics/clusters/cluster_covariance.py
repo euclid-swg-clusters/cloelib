@@ -66,7 +66,7 @@ class ClusterCovariance:
         ----------
         intermediates : dict
             Products returned by get_NC or get_xi0 from the same model and bins.
-            Counts require window_lambda_obs and window_z_obs. Clustering
+            Counts require window_z_lambda_obs. Clustering
             requires pk0_mean_values, radial_shell_window, radial_shell_volume,
             window_z_obs and cluster_counts. Higher multipoles are not supported.
         prediction : numpy.ndarray, optional
@@ -125,7 +125,6 @@ class ClusterCovariance:
                 z_obs_edges,
                 prediction,
                 intermediates["window_z_lambda_obs"],
-                intermediates["window_z_obs"],
             )
         if "pk0_mean_values" not in intermediates:
             raise NotImplementedError(
@@ -290,7 +289,9 @@ class ClusterCovariance:
         cluster_counts : numpy.ndarray
             Number counts in redshift and richness bins
         window_z_lambda_obs : numpy.ndarray
-            P(lamda_obs_bin,z_obs_bin|M, ztrue)
+            P(lamda_obs_bin,z_obs_bin|M, ztrue).
+            Dimensions: (z_obs, lambda_obs, ztrue, M) with (ztrue, M) in cluster_statitstics_modeling.tabulated_integrands.
+            Is in the intermediate_integration_products output of get_NC.
 
         Returns
         -------
