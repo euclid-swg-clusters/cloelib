@@ -58,7 +58,14 @@ class ClusterCovariance:
         self.z_tab_integ = z_tab_integ
         self.rint = None
 
-    def compute(self, *, intermediates, prediction=None, z_obs_edges=None):
+    def compute(
+        self,
+        *,
+        intermediates,
+        prediction=None,
+        z_obs_edges=None,
+        lambda_obs_edges=None,
+    ):
         """
         Select the covariance from the supplied summary statistic type.
 
@@ -74,6 +81,8 @@ class ClusterCovariance:
             ClusterCounts. Clustering uses intermediates['cluster_counts'].
         z_obs_edges : numpy.ndarray, optional
             Observed-redshift bin edges from get_NC, required for ClusterCounts.
+        lambda_obs_edges : numpy.ndarray, optional
+            Observed-richness bin edges from get_NC, required for ClusterCounts.
 
         Returns
         -------
@@ -89,7 +98,10 @@ class ClusterCovariance:
         >>> prediction, products = counts.get_NC(z_edges, richness_edges)
         >>> covariance = ClusterCovariance(counts)
         >>> matrix = covariance.compute(
-        ...     prediction=prediction, z_obs_edges=z_edges, intermediates=products
+        ...     prediction=prediction,
+        ...     z_obs_edges=z_edges,
+        ...     lambda_obs_edges=richness_edges,
+        ...     intermediates=products,
         ... )
 
         For a configured clustering model:
@@ -98,9 +110,12 @@ class ClusterCovariance:
         >>> matrix = ClusterCovariance(clustering).compute(intermediates=products)
         """
         if self._cov_type == "counts":
-            if prediction is None or z_obs_edges is None:
-                raise ValueError("Counts require prediction and z_obs_edges.")
+            if prediction is None or z_obs_edges is None or lambda_obs_edges is None:
+                raise ValueError(
+                    "Counts require prediction, z_obs_edges and lambda_obs_edges."
+                )
             z_obs_edges = np.asarray(z_obs_edges)
+            lambda_obs_edges = np.asarray(lambda_obs_edges)
             prediction = np.asarray(prediction)
             if (
                 z_obs_edges.ndim != 1
@@ -113,6 +128,11 @@ class ClusterCovariance:
                 )
             if prediction.ndim != 2 or prediction.shape[0] != z_obs_edges.size - 1:
                 raise ValueError("Count shape does not match the redshift bins.")
+            if (
+                lambda_obs_edges.ndim != 1
+                or prediction.shape[1] != lambda_obs_edges.size - 1
+            ):
+                raise ValueError("Count shape does not match the richness bins.")
             # The spatial-window loop fills this workspace in increasing bin order.
             self.rint = np.zeros(
                 (
@@ -123,6 +143,7 @@ class ClusterCovariance:
             )
             return self._get_NC_covariance(
                 z_obs_edges,
+                lambda_obs_edges,
                 prediction,
                 intermediates["window_z_lambda_obs"],
             )
@@ -223,18 +244,21 @@ class ClusterCovariance:
             self.rint[iz, :, :] * self.rint[: (iz + 1), :, :] * KL[:] ** 2, axis=-1
         )
 
-    def _compute_spatial_cov(self, z_obs_edges):
+    def _compute_spatial_cov(self, z_obs_edges, lambda_obs_mean):
         """Computes only spatial part of the covariance.
 
         Parameters
         ----------
         z_obs_edges : numpy.ndarray
             Edges of redshift bins for the integration.
+        lambda_obs_mean : numpy.ndarray
+            Mean observed richness of the clusters in each redshift bin, at which the
+            scatter of the observed redshift is evaluated. Dimensions: (z_obs).
 
         Returns
         -------
         spatial_cov : numpy.ndarray
-            Spatial part of the covariance
+            Spatial part of the covariance. Dimensions: (z_obs, z_obs).
         """
 
         z_obs_edges_size = len(z_obs_edges) - 1
@@ -246,14 +270,14 @@ class ClusterCovariance:
         )
 
         # corrected halo Pk (only 0-th order correction is enough for number counts covariance)
-        # can neglect richness dependence here
+        # neglecting the richness dependence of the scatter within each redshift bin
         pk *= photoz_rsd_monopole_correction(
             self.cluster_statitstics_modeling.halo_model_properties.background,
             z_mid,
             self.cluster_statitstics_modeling.tabulated_integrands["k"],
             self.cluster_statitstics_modeling.selection_function.scatter_z_obs(
-                0, z_mid
-            ),  # Note: rather than lambda_obs= 0 I suggest to use the mean value of the sample
+                lambda_obs_mean, z_mid
+            ),
         )[0]
 
         # spherical harmonic expansion coefficients (covariance)
@@ -279,13 +303,17 @@ class ClusterCovariance:
             spatial_cov[: (ind_z + 1), ind_z] = spatial_cov[ind_z, : (ind_z + 1)]
         return spatial_cov
 
-    def _get_NC_covariance(self, z_obs_edges, cluster_counts, window_z_lambda_obs):
+    def _get_NC_covariance(
+        self, z_obs_edges, lambda_obs_edges, cluster_counts, window_z_lambda_obs
+    ):
         """Computes theoretical covariance for cluster counts, including shot noise and sample covariance
 
         Parameters
         ----------
         z_obs_edges : numpy.ndarray
             Edges of redshift bins for the integration.
+        lambda_obs_edges : numpy.ndarray
+            Edges of richness bins for the integration.
         cluster_counts : numpy.ndarray
             Number counts in redshift and richness bins
         window_z_lambda_obs : numpy.ndarray
@@ -317,8 +345,19 @@ class ClusterCovariance:
         # Compute covraiance
         ####################
 
+        # mean richness of each redshift bin, from the centers of the richness bins
+        # weighted by the counts (simple average if there are no clusters) : (z_obs)
+        lambda_mid = 0.5 * (lambda_obs_edges[1:] + lambda_obs_edges[:-1])
+        total_counts = cluster_counts.sum(axis=1)
+        lambda_obs_mean = np.divide(
+            np.sum(cluster_counts * lambda_mid, axis=1),
+            total_counts,
+            out=np.full(total_counts.shape, lambda_mid.mean()),
+            where=total_counts > 0.0,
+        )
+
         # spatial component of covariance (z_obs, z_obs)
-        spatial_cov = self._compute_spatial_cov(z_obs_edges)
+        spatial_cov = self._compute_spatial_cov(z_obs_edges, lambda_obs_mean)
 
         # shot noise (z_obs, z_obs, lambda_obs, lambda_obs)
         _shot_noise = (

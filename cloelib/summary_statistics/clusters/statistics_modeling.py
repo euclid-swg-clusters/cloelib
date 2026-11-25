@@ -210,7 +210,7 @@ class ClusterStatisticsModeling:
         return self.selection_function.window_richness_observed(**kwargs)
 
     def window_redshift_richness_observed(self, z_obs_edges, lambda_obs_edges):
-        r"""Compute the window function of each observed richness and redhisft bin, given by:
+        r"""Compute the window function of each observed richness and redshift bin, given by:
 
         ..math:
             W_{\Delta\lambda_{\rm obs},\Delta\z_{\rm obs}}(M, z_{\rm true}) =

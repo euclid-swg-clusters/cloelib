@@ -177,6 +177,11 @@ class GaussianSelectionFunction:
         window_z_obs : numpy.ndarray
             Integral of P(z_obs|lambda_obs, z_true) in z_obs bins.
             Dimensions: (len(z_obs_edges)-1, len(lambda_obs_edges)-1, len(z_true)).
+
+        Notes
+        -----
+        P(z_obs|lambda_obs, z_true) is evaluated at the lower edge of each lambda_obs
+        bin, neglecting its dependence on richness within the bin.
         """
 
         z_obs_bins_size = len(z_obs_edges) - 1
@@ -187,9 +192,7 @@ class GaussianSelectionFunction:
 
         # reshape for multiplication
         _z_obs_tabs = z_obs_tabs[:, :, np.newaxis, np.newaxis]
-        _lambda_obs = lambda_obs_edges[
-            np.newaxis, :-1, np.newaxis
-        ]  # The fact that is computing at the low edge of lambda_ob is wrong, it should be the center of the bin
+        _lambda_obs = lambda_obs_edges[np.newaxis, :-1, np.newaxis]
         _z_true = z_true[np.newaxis, np.newaxis, :]
 
         # Window function
