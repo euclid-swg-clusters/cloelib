@@ -64,34 +64,29 @@ class ClusterCounts:
             Returned only when `return_intermediate_products` is true.
             Contains :
 
-                * window_lambda_obs (numpy.ndarray) : Integral of P(lamda_obs|M, ztrue) in lambda_obs bins.
-                * window_z_obs (numpy.ndarray) : Integral of P(z_obs|lambda_obs, ztrue) in z_obs bins.
+                * window_z_lambda_obs (numpy.ndarray) : P(lamda_obs_bin,z_obs_bin|M, ztrue).
         """
 
         ############################################
         # Get cluster statistics modeling quantities
         ############################################
-        # integral of P(lambda_obs|M, z) on lambda_obs bins : (lambda_obs, M, ztrue)
-        window_lambda_obs = self.cluster_statitstics_modeling.window_richness_observed(
-            lambda_obs_edges
-        )
-        # integral of P(z_obs|lambda_obs, z) on z_obs bins : (z_obs, lambda_obs, ztrue)
-        window_z_obs = self.cluster_statitstics_modeling.window_z_observed(
-            z_obs_edges, lambda_obs_edges
+        # P(lambda_obs_bin,z_obs_bin|M, z): (z_obs_bin,lambda_obs_bin, ztrue, mass)
+        window_redshift_lambda_obs = (
+            self.cluster_statitstics_modeling.window_redshift_richness_observed(
+                z_obs_edges, lambda_obs_edges
+            )
         )
         # cluster counts : (z_obs, lambda_obs)
         cluster_counts = self.cluster_statitstics_modeling.integrate_probe_function_in_redshift(
-            # integral of P(lambda_obs|M, z)*dn/dM on lambda_obs bins and mass : (lambda_obs, ztrue)
+            # integral of P(lambda_obs_bin,z_obs_bin|M, z)*dn/dM on lambda_obs bins and mass : (lambda_obs, ztrue)
             self.cluster_statitstics_modeling.integrate_probe_function_in_mass(
-                np.ones((1, 1)), window_lambda_obs
+                np.ones((1, 1)), window_redshift_lambda_obs
             ),
-            window_z_obs,
         )
 
         if not return_intermediate_products:
             return cluster_counts
 
         return cluster_counts, {
-            "window_lambda_obs": window_lambda_obs,
-            "window_z_obs": window_z_obs,
+            "window_z_lambda_obs": window_redshift_lambda_obs,
         }

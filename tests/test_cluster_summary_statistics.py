@@ -322,6 +322,7 @@ def get_values(
     t0 = time.time()
     cov_cluster_counts = ClusterCovariance(cluster_counts_statistics).compute(
         z_obs_edges=z_obs_nc_edges,
+        lambda_obs_edges=lambda_obs_nc_edges,
         prediction=cluster_counts,
         intermediates=counts_intermediate_integration_products,
     )

@@ -1,6 +1,6 @@
 # import jax.numpy as np
 import numpy as np
-from numpy.testing import assert_allclose
+from numpy.testing import assert_allclose, assert_raises
 
 from cloelib.cosmology.camb_cosmology import CAMBBackground, CAMBLinearPerturbations
 from cloelib.observables.halos.halo_abundance import CastroHaloAbundance
@@ -104,3 +104,53 @@ def test_count_covariance():
         np.array([0.99959593, 0.99956826, 0.9995387, 0.99950711, 0.99947336]),
         rtol=1e-6,
     )
+
+    print("    Counts covariance with richness-dependent photo-z scatter")
+    z_obs_edges = np.linspace(0.2, 1.4, 4)
+    lambda_obs_edges = np.array([20.0, 40.0, 200.0])
+    lambda_mid = 0.5 * (lambda_obs_edges[1:] + lambda_obs_edges[:-1])
+    selection_function.lambda_tab_integ = [31, 31]
+    counts = ClusterCounts(clusterstatmod)
+    prediction, products = counts.get_NC(z_obs_edges, lambda_obs_edges)
+
+    def _get_cov(scatter_z_obs, prediction=prediction):
+        # the scatter enters only in the spatial part, not in prediction and products
+        selection_function.scatter_z_obs = scatter_z_obs
+        return ClusterCovariance(counts, z_tab_integ=z_tab_integ).compute(
+            intermediates=products,
+            prediction=prediction,
+            z_obs_edges=z_obs_edges,
+            lambda_obs_edges=lambda_obs_edges,
+        )
+
+    # scatter decreasing with richness, infinite for lambda_obs = 0
+    def _scatter(lambda_obs, z):
+        return 0.1 * lambda_obs**-0.3 * np.ones_like(z)
+
+    cov = _get_cov(_scatter)
+    assert cov.shape == (3, 3, 2, 2)
+    assert np.all(np.isfinite(cov))
+    # symmetric and positive definite, larger than the shot noise
+    cov_matrix = cov.transpose(0, 2, 1, 3).reshape(6, 6)
+    assert_allclose(cov_matrix, cov_matrix.T, rtol=1e-12)
+    assert np.all(np.linalg.eigvalsh(cov_matrix) > 0.0)
+    assert np.all(np.diag(cov_matrix) > prediction.flatten())
+
+    # the scatter is evaluated at the mean richness of each redshift bin
+    lambda_mean = np.average(
+        np.tile(lambda_mid, (3, 1)), weights=prediction, axis=1
+    )
+    assert np.all((lambda_mean > lambda_mid[0]) & (lambda_mean < lambda_mid[1]))
+    cov_mean = _get_cov(lambda lambda_obs, z: _scatter(lambda_mean, z))
+    assert_allclose(cov, cov_mean, rtol=1e-12)
+
+    # redshift bin without clusters
+    prediction_empty = prediction.copy()
+    prediction_empty[1] = 0.0
+    assert np.all(np.isfinite(_get_cov(_scatter, prediction_empty)))
+
+    # the edges of the richness bins are needed
+    with assert_raises(ValueError):
+        ClusterCovariance(counts).compute(
+            intermediates=products, prediction=prediction, z_obs_edges=z_obs_edges
+        )
