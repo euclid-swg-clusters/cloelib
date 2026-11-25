@@ -1,7 +1,6 @@
 # General imports
 # import jax.numpy as np
 import numpy as np
-from scipy.integrate import simpson
 import scipy.special as spc
 
 from cloelib.observables.halos.halo_mass_observable import (
@@ -118,7 +117,7 @@ class AnalyticSelectionFunction:
         z_tab_integ: int
             Number of points to be used for z_obs integration.
         lambda_tab_integ: list
-            Number of points to be used for the lambda_obs integration
+            Number of sub-bins to be used for the lambda_obs integration
             in each lambda_obs bin. Must be same size of lambda_obs_edges.
         """
         self.halo_mass_observable = halo_mass_observable
@@ -449,7 +448,8 @@ class AnalyticSelectionFunction:
             True redshift to compute the window.
         lambda_true : numpy.ndarray
             Values to be used for marginalization over true richness.
-            If not provided computed internally to the function
+            If not provided, 201 logarithmically spaced values between 5 (the lower
+            limit of the calibration of the selection function) and 500.
 
         Returns
         -------
@@ -459,18 +459,20 @@ class AnalyticSelectionFunction:
         """
 
         if lambda_true is None:
-            lambda_true = np.linspace(5.0, 300.0, 50)
+            lambda_true = np.geomspace(5.0, 500.0, 201)
 
         # add the z_obs ranges below and above the bins, to cover all z_obs
         z_obs_edges_all = np.concatenate(([-np.inf], z_obs_edges, [np.inf]))
 
         # integral of P(Delta_lambda_obs, Delta_z_obs | lambda_true, z_true) over lambda_true
         # Dimensions: (z_obs_bins + 2, lambda_obs_bins, z_true)
-        window = simpson(
+        # computed with the trapezoidal rule in ln(lambda_true)
+        window = np.trapezoid(
             self.window_redshift_lambda_observed(
                 z_obs_edges_all, lambda_obs_edges, z_true, lambda_true
-            ),
-            x=lambda_true,
+            )
+            * lambda_true,
+            x=np.log(lambda_true),
             axis=-1,
         )
 
@@ -601,11 +603,12 @@ class AnalyticSelectionFunction:
             z_true, mass, lambda_true
         )
 
-        # return simpson(
+        # trapezoidal rule in ln(lambda_true)
         return np.trapezoid(
             pdf_mass_richness_scaling[np.newaxis, :, :, :]  # (1, z, M, ltr)
-            * windows_lambda_obs_lambda_true[:, :, np.newaxis, :],  # (lobs, z, 1, ltr)
-            x=lambda_true,
+            * windows_lambda_obs_lambda_true[:, :, np.newaxis, :]  # (lobs, z, 1, ltr)
+            * lambda_true,
+            x=np.log(lambda_true),
             axis=-1,
         )
 
@@ -626,6 +629,11 @@ class AnalyticSelectionFunction:
             P(\lambda_{\rm obs}|\lambda_{\rm true}, z_{\rm true})
             \int_{\Delta z_{\rm obs}} d z_{\rm obs}
             P(z_{\rm obs}|\lambda_{\rm obs}, \lambda_{\rm true}, z_{\rm true})
+
+        Each richness bin is divided in sub-bins: the integral of the observed
+        richness PDF in each sub-bin is computed with its closed form (see
+        `window_lambda_observed`), while the observed redshift window is evaluated
+        at the center of the sub-bin.
 
         Parameters
         ----------
@@ -665,30 +673,33 @@ class AnalyticSelectionFunction:
         )
 
         for i_lob in range(lambda_obs_bins_size):
-            lob_tab = np.linspace(
-                lambda_obs_edges[i_lob],
-                lambda_obs_edges[i_lob + 1],
-                self.lambda_tab_integ[i_lob],
-            )  # (n_tab,)
+            # split the lambda_obs bin in sub-bins, logarithmic if possible
+            # edges: (n_sub + 1,), centers: (n_sub,)
+            lob_low, lob_high = lambda_obs_edges[i_lob], lambda_obs_edges[i_lob + 1]
+            n_sub = self.lambda_tab_integ[i_lob]
+            if lob_low > 0.0:
+                lob_sub_edges = np.geomspace(lob_low, lob_high, n_sub + 1)
+                lob_sub = np.sqrt(lob_sub_edges[:-1] * lob_sub_edges[1:])
+            else:
+                lob_sub_edges = np.linspace(lob_low, lob_high, n_sub + 1)
+                lob_sub = 0.5 * (lob_sub_edges[:-1] + lob_sub_edges[1:])
 
-            # # w_zob at each lambda_obs quadrature point
-            # # shape: (n_tab, z_obs_bins, z_true, lambda_true)
-            w_zob_tab = self.window_zob_given_lob_ztr_ltr(
-                z_obs_edges, lob_tab, z_true, lambda_true
-            ).transpose(1, 0, 2, 3)
+            # exact integral of P(lob|ltr, ztr) in each sub-bin
+            # shape: (n_sub, z_true, lambda_true)
+            p_lob_sub = np.clip(
+                self.window_lambda_observed(lob_sub_edges, z_true, lambda_true),
+                0.0,  # (rounding can make it slightly negative)
+                None,
+            )
 
-            # P(lob|ltr, ztr) at each quadrature point
-            # shape: (n_tab, z_true, lambda_true)
-            _lob = lob_tab[:, np.newaxis, np.newaxis]
-            _ztr = z_true[np.newaxis, :, np.newaxis]
-            _ltr = lambda_true[np.newaxis, np.newaxis, :]
-            p_lob = self._prob_lambda_obs(_ztr, _ltr, _lob)
-
-            # integrand: (n_tab, z_obs_bins, z_true, lambda_true)
-            integrand = p_lob[:, np.newaxis, :, :] * w_zob_tab
+            # P(Delta_zob|lob, ltr, ztr) at the center of each sub-bin,
+            # shape: (z_obs_bins, n_sub, z_true, lambda_true)
+            w_zob_sub = self.window_zob_given_lob_ztr_ltr(
+                z_obs_edges, lob_sub, z_true, lambda_true
+            )
 
             # integrate over lambda_obs -> (z_obs_bins, z_true, lambda_true)
-            window[:, i_lob, :, :] = simpson(integrand, x=lob_tab, axis=0)
+            window[:, i_lob, :, :] = np.sum(p_lob_sub[np.newaxis] * w_zob_sub, axis=1)
 
         return window
 
@@ -724,7 +735,8 @@ class AnalyticSelectionFunction:
             True redshift to compute the window.
         lambda_true : numpy.ndarray
             Values to be used for marginalization over true richness.
-            If not provided, defined internally in the function
+            If not provided, 201 logarithmically spaced values between 5 (the lower
+            limit of the calibration of the selection function) and 500.
 
         Returns
         -------
@@ -754,12 +766,7 @@ class AnalyticSelectionFunction:
 
         # Define the lambda_true grids for integration
         if lambda_true is None:
-            mean_ltr_given_lob_ztr = (
-                lambda_obs_edges[[0, -1], np.newaxis] - self.mu_lambda_0
-            ) / (self.mu_lambda_norm + self.mu_lambda_z * z_true[np.newaxis, :]) + 25.0
-            np.amin(mean_ltr_given_lob_ztr) * 0.5
-            hi_ltr = np.amax(mean_ltr_given_lob_ztr) * 1.5
-            lambda_true = np.linspace(1.0, hi_ltr, 50)
+            lambda_true = np.geomspace(5.0, 500.0, 201)
 
         # window integrated over lob and zob bin
         # shape: (z_obs_bin, lambda_obs_bin, z_true, lambda_true)
@@ -783,7 +790,10 @@ class AnalyticSelectionFunction:
                 np.newaxis, np.newaxis, :, :, :
             ]  # (1, 1, z_true, mass, lambda_true)
         )
-        # integrate over lambda_true -> (z_obs_bins, z_true, mass)
-        window = simpson(integrand_ltr, x=lambda_true, axis=-1)
+        # integrate over lambda_true with the trapezoidal rule in ln(lambda_true)
+        # -> (z_obs_bins, lambda_obs_bins, z_true, mass)
+        window = np.trapezoid(
+            integrand_ltr * lambda_true, x=np.log(lambda_true), axis=-1
+        )
 
         return window

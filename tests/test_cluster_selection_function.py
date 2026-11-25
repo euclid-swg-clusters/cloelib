@@ -4,6 +4,7 @@ import os
 
 import numpy as np
 from numpy.testing import assert_allclose
+from scipy.integrate import simpson
 from scipy.stats import exponnorm, norm
 
 from cloelib.observables.halos.halo_mass_observable import (
@@ -656,6 +657,49 @@ def test_analytical_selectionfunction_window_z_observed():
     )
 
 
+def test_analytical_selectionfunction_window_redshift_lambda_observed():
+    sf = _get_test_analytic_sf()
+
+    z_obs_edges = np.array([0.4, 0.6, 0.8, 1.0])
+    z_true = np.array([0.35, 0.5, 0.75, 1.1])
+    lambda_true = np.geomspace(5.0, 500.0, 41)
+
+    # narrow and wide richness bins
+    for lambda_obs_edges in (
+        np.array([30.0, 60.0, 90.0, 150.0, 300.0]),
+        np.array([20.0, 30.0, 45.0, 60.0, 500.0]),
+    ):
+        sf.lambda_tab_integ = [32, 32, 32, 32]
+        args = (lambda_obs_edges, z_true, lambda_true)
+        window = sf.window_redshift_lambda_observed(z_obs_edges, *args)
+        assert window.shape == (3, 4, 4, 41)
+
+        # all z_obs: closed-form window in lambda_obs
+        window_all = sf.window_redshift_lambda_observed(
+            np.array([-np.inf, np.inf]), *args
+        )
+        assert_allclose(window_all[0], sf.window_lambda_observed(*args), atol=1e-14)
+
+        # independent integration of P(lob|ltr,ztr) P(zob|lob,ltr,ztr)
+        for b in range(lambda_obs_edges.size - 1):
+            lob = np.geomspace(lambda_obs_edges[b], lambda_obs_edges[b + 1], 4001)
+            _lob, _ztr, _ltr = np.meshgrid(lob, z_true, lambda_true, indexing="ij")
+            mu = sf._mu_lambda_obs(_ztr, _ltr)
+            sig = sf._scatter_lambda_obs(_ztr, _ltr)
+            tau = sf._tau_lambda_obs(_ztr, _ltr)
+            f_prj = sf._fprj_lambda_obs(_ztr, _ltr)
+            p_lob = (1.0 - f_prj) * norm.pdf(_lob, mu, sig) + f_prj * exponnorm.pdf(
+                _lob, 1.0 / (sig * tau), loc=mu, scale=sig
+            )
+            sig_z = sf.scatter_z_obs(_lob, _ztr, _ltr)
+            for ind_z in range(z_obs_edges.size - 1):
+                p_zob = norm.cdf(z_obs_edges[ind_z + 1], _ztr, sig_z) - norm.cdf(
+                    z_obs_edges[ind_z], _ztr, sig_z
+                )
+                ref = simpson(p_lob * p_zob, x=lob, axis=0)
+                assert_allclose(window[ind_z, b], ref, atol=2e-5)
+
+
 if __name__ == "__main__":
     print("test_gaussian_selectionfunction")
     test_gaussian_selectionfunction()
@@ -677,3 +721,6 @@ if __name__ == "__main__":
 
     print("Analytic SF: window in z_obs")
     test_analytical_selectionfunction_window_z_observed()
+
+    print("Analytic SF: window in z_obs and lambda_obs")
+    test_analytical_selectionfunction_window_redshift_lambda_observed()
