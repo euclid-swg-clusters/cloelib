@@ -522,8 +522,8 @@ class AnalyticSelectionFunction:
     def window_richness_observed(
         self,
         lambda_obs_edges,
-        z_true,
         mass,
+        z_true,
         lambda_true,
     ):
         r"""Compute the window function of each observed richness bin, given by:
@@ -539,10 +539,10 @@ class AnalyticSelectionFunction:
         ----------
         lambda_obs_edges : numpy.ndarray
             Edges of richness bins for the integration.
-        z_true : numpy.ndarray
-            True redshift to compute the window.
         mass : numpy.ndarray
             Mass to compute the window.
+        z_true : numpy.ndarray
+            True redshift to compute the window.
         lambda_true : numpy.ndarray
             Values to be used for marginalization over true richness.
 
@@ -670,8 +670,8 @@ class AnalyticSelectionFunction:
         self,
         z_obs_edges,
         lambda_obs_edges,
-        z_true,
         mass,
+        z_true,
         lambda_true=None,
     ):
         r"""
@@ -692,10 +692,10 @@ class AnalyticSelectionFunction:
             Edges of redshift bins for the integration.
         lambda_obs_edges : numpy.ndarray
             Edges of richness bins for the integration.
-        z_true : numpy.ndarray
-            True redshift to compute the window.
         mass : numpy.ndarray
             Mass to compute the window.
+        z_true : numpy.ndarray
+            True redshift to compute the window.
         lambda_true : numpy.ndarray
             Values to be used for marginalization over true richness.
             If not provided, defined internally in the function
