@@ -419,15 +419,25 @@ class AnalyticSelectionFunction:
     def window_z_observed(
         self, z_obs_edges, lambda_obs_edges, z_true, lambda_true=None
     ):
-        r"""Compute the redshift window function of each observed redshift bin,
-        marginalized over lambda_true:
+        r"""Compute the window function of each observed redshift bin, given the
+        observed richness bin and the true redshift:
 
         ..math:
-            W_{\Delta z_{\rm obs},\lambda_{\rm obs}}(z_{\rm true}) =
-            \int_{\Delta z_{\rm obs}}dz_{\rm obs}
-            \int_{\Delta \lambda_{\rm obs}}d\lambda_{\rm obs}
-            \int_0^{\infty}
-            d \lambda_{\rm true} P(\lambda_{\rm obs},z_{\rm obs}| \lambda_{\rm true}, z_{\rm true})
+            W_{\Delta z_{\rm obs}}(\Delta\lambda_{\rm obs}, z_{\rm true}) =
+            P(\Delta z_{\rm obs} | \Delta\lambda_{\rm obs}, z_{\rm true}) =
+            \frac{\int_0^{\infty} d\lambda_{\rm true}
+            \int_{\Delta \lambda_{\rm obs}} d\lambda_{\rm obs}
+            P(\lambda_{\rm obs} | \lambda_{\rm true}, z_{\rm true})
+            \int_{\Delta z_{\rm obs}} dz_{\rm obs}
+            P(z_{\rm obs} | \lambda_{\rm obs}, \lambda_{\rm true}, z_{\rm true})}
+            {\int_0^{\infty} d\lambda_{\rm true}
+            \int_{\Delta \lambda_{\rm obs}} d\lambda_{\rm obs}
+            P(\lambda_{\rm obs} | \lambda_{\rm true}, z_{\rm true})}
+
+        This function is used to compute the clustering covariance matrix. It is an
+        approximation: the observed redshift distribution depends on the true
+        richness, which is marginalized over with a flat prior (i.e. neglecting the
+        richness function).
 
         Parameters
         ----------
@@ -444,18 +454,34 @@ class AnalyticSelectionFunction:
         Returns
         -------
         window_z_obs : numpy.ndarray
-            Integral of P(Delta_lambda_obs, Delta_z_obs| lambda_true, z_true) over lambda_true.
-            Dimensions: (z_obs_bins, lambda_obs, z_true).
+            Probability of z_obs bins given the lambda_obs bins and z_true.
+            Dimensions: (z_obs_bins, lambda_obs_bins, z_true).
         """
 
         if lambda_true is None:
             lambda_true = np.linspace(5.0, 300.0, 50)
 
-        # Dimensions: (z_obs_bins, lambda_obs_bin, z_true, lambda_true)
-        w_Dzob_Dlob__ztr_ltr = self.window_redshift_lambda_observed(
-            z_obs_edges, lambda_obs_edges, z_true, lambda_true
+        # add the z_obs ranges below and above the bins, to cover all z_obs
+        z_obs_edges_all = np.concatenate(([-np.inf], z_obs_edges, [np.inf]))
+
+        # integral of P(Delta_lambda_obs, Delta_z_obs | lambda_true, z_true) over lambda_true
+        # Dimensions: (z_obs_bins + 2, lambda_obs_bins, z_true)
+        window = simpson(
+            self.window_redshift_lambda_observed(
+                z_obs_edges_all, lambda_obs_edges, z_true, lambda_true
+            ),
+            x=lambda_true,
+            axis=-1,
         )
-        return simpson(w_Dzob_Dlob__ztr_ltr, x=lambda_true, axis=-1)
+
+        # normalize over all z_obs
+        normalization = window.sum(axis=0)
+        return np.divide(
+            window[1:-1],
+            normalization,
+            out=np.zeros_like(window[1:-1]),
+            where=normalization > 0.0,
+        )
 
     def window_lambda_observed(self, lambda_obs_edges, z_true, lambda_true):
         r"""Compute the window function of each observed richness bin, given by:

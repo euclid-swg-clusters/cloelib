@@ -4,6 +4,8 @@ import os
 
 import numpy as np
 from numpy.testing import assert_allclose
+from scipy.stats import exponnorm, norm
+
 from cloelib.observables.halos.halo_mass_observable import (
     LognormalPowerLawHaloMassObservable,
     ShiftedPoissonHaloMassObservable,
@@ -601,6 +603,59 @@ def test_analytical_selectionfunction_window_lambda_observed():
     assert_allclose(wf, wf_num, atol=1e-6)
 
 
+def test_analytical_selectionfunction_window_z_observed():
+    sf = _get_test_analytic_sf()
+    sf.lambda_tab_integ = [51, 201]
+
+    z_obs_edges = np.array([0.4, 0.6, 0.8, 1.0])
+    lambda_obs_edges = np.array([20.0, 30.0, 100.0])
+    z_true = np.array([0.35, 0.5, 0.75, 1.1])
+    lambda_true = np.geomspace(5.0, 300.0, 101)
+    args = (lambda_obs_edges, z_true, lambda_true)
+
+    window = sf.window_z_observed(z_obs_edges, *args)
+    assert window.shape == (3, 2, 4)
+
+    # it is a probability
+    assert np.all((window >= 0.0) & (window <= 1.0))
+    window_all = sf.window_z_observed(np.array([-np.inf, np.inf]), *args)
+    assert_allclose(window_all, 1.0, rtol=1e-12)
+
+    # independent integration of P(lob|ltr,ztr) P(zob|lob,ltr,ztr)
+    for b in range(lambda_obs_edges.size - 1):
+        lob = np.linspace(lambda_obs_edges[b], lambda_obs_edges[b + 1], 1001)
+        _lob, _ztr, _ltr = np.meshgrid(lob, z_true, lambda_true, indexing="ij")
+        mu = sf._mu_lambda_obs(_ztr, _ltr)
+        sig = sf._scatter_lambda_obs(_ztr, _ltr)
+        tau = sf._tau_lambda_obs(_ztr, _ltr)
+        f_prj = sf._fprj_lambda_obs(_ztr, _ltr)
+        # exponentially modified Gaussian, from scipy
+        p_lob = (1.0 - f_prj) * norm.pdf(_lob, mu, sig) + f_prj * exponnorm.pdf(
+            _lob, 1.0 / (sig * tau), loc=mu, scale=sig
+        )
+        sig_z = sf.scatter_z_obs(_lob, _ztr, _ltr)
+        norm_lob = np.trapezoid(np.trapezoid(p_lob, lob, axis=0), lambda_true, axis=-1)
+        for ind_z in range(z_obs_edges.size - 1):
+            p_zob = norm.cdf(z_obs_edges[ind_z + 1], _ztr, sig_z) - norm.cdf(
+                z_obs_edges[ind_z], _ztr, sig_z
+            )
+            ref = np.trapezoid(
+                np.trapezoid(p_lob * p_zob, lob, axis=0), lambda_true, axis=-1
+            )
+            assert_allclose(window[ind_z, b], ref / norm_lob, atol=1e-3)
+
+    # if the scatter of z_obs does not depend on richness, the window does not
+    # depend on it either (as in the Gaussian selection function)
+    sf.sig_z_lambda_exponent, sf.sig_z_z_norm = 0.0, 0.0
+    cdf = norm.cdf(z_obs_edges[:, np.newaxis], z_true, sf.sig_z_lambda_norm)
+    assert_allclose(
+        sf.window_z_observed(z_obs_edges, *args),
+        np.diff(cdf, axis=0)[:, np.newaxis, :].repeat(2, axis=1),
+        rtol=1e-8,
+        atol=1e-12,
+    )
+
+
 if __name__ == "__main__":
     print("test_gaussian_selectionfunction")
     test_gaussian_selectionfunction()
@@ -619,3 +674,6 @@ if __name__ == "__main__":
 
     print("Analytic SF: closed-form window in lambda_obs")
     test_analytical_selectionfunction_window_lambda_observed()
+
+    print("Analytic SF: window in z_obs")
+    test_analytical_selectionfunction_window_z_observed()
