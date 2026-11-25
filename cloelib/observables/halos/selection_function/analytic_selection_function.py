@@ -32,27 +32,34 @@ class AnalyticSelectionFunction:
         lambda_tab_integ: list,
     ):
         r"""
-        Class implementing an analytical selection function.
+        Class defining the selection function of galaxy clusters:
 
-        Class defining the selection function of galaxy clusters
-        calibrated on simulations.
+        ..math:
+        P(\lambda_{\rm ob}, z_{\rm ob} | \lambda, z) = P(\lambda_{\rm ob} | \lambda, z)
+        P(z_{\rm ob} | \lambda_{\rm ob}, \lambda, z)
+
+        The model, calibrated against simulations, builds upon the one presented in
+        `Costanzi et al. 2019 <https://arxiv.org/abs/1807.07072>`_ and accounts for
+        projection effects.
 
         The observed richness PDF is expressed as follows:
 
         ..math:
-        P(\lambda_{\rm ob} | \lambda,z)= (1-f_{\rm prj}) \mathcal{N}(\mu,\sigma) +
+        P(\lambda_{\rm ob} | \lambda,z)= (1-f_{\rm prj}) \mathcal{N}(\mu,\sigma)
                 + f_{\rm prj} \frac{\tau}{2} \exp\left[ \frac{\tau}{2} (2\mu + \tau\sigma^2 - 2 \lambda_{\rm ob})\right]
                 {\rm erfc} \left( \frac{\mu +\tau\sigma^2-\lambda_{\rm ob}}{\sqrt{2}\sigma}\right)
 
         where
 
         ..math:
-        f_{\rm prj}(\lambda) = f_{\rm prj,0} \lambda^{[f_{\rm prj,exp}+f_{\rm prj,z} z]}\,,
+        f_{\rm prj}(\lambda, z) = \min\left[1,
+        f_{\rm prj,0} \lambda^{[f_{\rm prj,exp}+f_{\rm prj,z} z]}\right]\,,
 
         while $\mathcal{N}(\mu,\sigma)$ is a Gaussian PDF with $\mu$ and $\sigma$ defined as
 
         ..math:
-        \mu(\lambda,z) = \mu_{\lambda_0} + (\mu_0 +z\mu_z)  (\lambda- \lambda_{\rm pivot})\,,
+        \mu(\lambda,z) = \max\left[1,
+        \mu_{\lambda_0} + (\mu_0 +z\mu_z)  (\lambda- \lambda_{\rm pivot})\right]\,,
 
         ..math:
         \sigma(\lambda,z) = (\sigma_0 + z \sigma_z) \lambda^{\sigma_{\rm exp} }\,.
@@ -61,6 +68,9 @@ class AnalyticSelectionFunction:
 
         ..math:
         \tau(\lambda,z) = (\tau_0 + z\tau_z)  \lambda^{\tau_{\rm exp}}
+
+        If $f_{\rm prj}=0$, the observed richness PDF reduces to the Gaussian
+        $\mathcal{N}(\mu,\sigma)$.
 
         The observed redshift PDF is Gaussian with a mean equal to the
         true redshift and a standard deviation expressed as follows:
@@ -252,7 +262,7 @@ class AnalyticSelectionFunction:
         true richness, true redshift, and observed richness points
 
         ..math:
-        P(\lambda_{\rm obs} | \lambda_{\rm true},z_{\rm true})= (1-f^{\rm prj}) \mathcal{N}~(\mu,\sigma) +
+        P(\lambda_{\rm obs} | \lambda_{\rm true},z_{\rm true})= (1-f^{\rm prj}) \mathcal{N}~(\mu,\sigma)
         + f^{\rm prj} \frac{\tau}{2} \exp\left[ \frac{\tau}{2} (2\mu + \tau\sigma^2 - 2 \lambda_{\rm obs})\right]
         {\rm erfc} \left( \frac{\mu +\tau\sigma^2-\lambda_{\rm obs}}{\sqrt{2}\sigma}\right)
 
