@@ -218,7 +218,7 @@ class AnalyticSelectionFunction:
             self.tau_lambda_norm + self.tau_lambda_z * z
         ) * lambda_true**self.tau_lambda_exponent
 
-    def _fprj_lambda_obs(self, z, lambda_true):
+    def _projection_fraction_lambda_obs(self, z, lambda_true):
         r"""
         Projected cluster fraction at the requested true richness points.
 
@@ -279,7 +279,7 @@ class AnalyticSelectionFunction:
         sig_pure = self._scatter_lambda_obs(z, lambda_true)
         sig2_l = sig_pure**2.0
         tau = self._tau_lambda_obs(z, lambda_true)
-        f_prj = self._fprj_lambda_obs(z, lambda_true)
+        f_prj = self._projection_fraction_lambda_obs(z, lambda_true)
         erfc_arg1 = (mu + tau * sig2_l - lambda_obs) / np.sqrt(2 * sig2_l)
         exptau = np.exp(
             0.5 * tau * (2.0 * mu + tau * sig2_l - 2.0 * lambda_obs), dtype="float128"
@@ -525,7 +525,7 @@ class AnalyticSelectionFunction:
         mu = self._mu_lambda_obs(_z_true, _lambda_true)
         sig = self._scatter_lambda_obs(_z_true, _lambda_true)
         tau = self._tau_lambda_obs(_z_true, _lambda_true)
-        f_prj = self._fprj_lambda_obs(_z_true, _lambda_true)
+        f_prj = self._projection_fraction_lambda_obs(_z_true, _lambda_true)
 
         return (
             self._cdf(_lob_high, mu, sig, tau, f_prj)
