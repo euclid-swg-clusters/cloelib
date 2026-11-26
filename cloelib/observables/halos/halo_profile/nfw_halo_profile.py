@@ -16,7 +16,7 @@ class NFWHaloProfile(HaloProfileBase):
         mean_nz: np.ndarray | None = None,
         sigma_nz: np.ndarray | None = None,
         alpha_nz: np.ndarray | None = None,
-        z_mean_tomo_bin: np.ndarray | None = None,
+        z_min_tomo_bin: np.ndarray | None = None,
     ):
         """
         NFW profile class.
@@ -43,9 +43,8 @@ class NFWHaloProfile(HaloProfileBase):
         alpha_nz : np.ndarray, optional
             Skewness parameter of the skew-normal source redshift distribution of
             each tomographic bin (see `HaloProfileBase`).
-        z_mean_tomo_bin : np.ndarray, optional
-            Mean redshift of the sources in each tomographic bin (see
-            `HaloProfileBase`).
+        z_min_tomo_bin : np.ndarray, optional
+            Lower edge of each tomographic bin (see `HaloProfileBase`).
         """
         HaloProfileBase.__init__(
             self,
@@ -56,7 +55,7 @@ class NFWHaloProfile(HaloProfileBase):
             mean_nz=mean_nz,
             sigma_nz=sigma_nz,
             alpha_nz=alpha_nz,
-            z_mean_tomo_bin=z_mean_tomo_bin,
+            z_min_tomo_bin=z_min_tomo_bin,
         )
 
         self.two_halo = two_halo

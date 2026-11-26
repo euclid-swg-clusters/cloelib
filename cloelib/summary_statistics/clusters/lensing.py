@@ -203,24 +203,14 @@ class ClusterWeakLensing:
         """
         z_obs_edges_size = len(z_obs_edges) - 1
 
-        # mean z_obs per bin, used to select the tomographic bin index
-        z_obs_mean = 0.5 * (z_obs_edges[:-1] + z_obs_edges[1:])
-
         # Effective inverse critical surface mass density : (z_obs, ztrue)
-        effective_inverse_critical_surface_mass_density = np.zeros(
-            (
-                z_obs_edges_size,
-                self.cluster_statitstics_modeling.tabulated_integrands["ztrue"].size,
-            )
+        # the sources are selected at the true redshift of the clusters
+        effective_inverse_critical_surface_mass_density = np.tile(
+            self.profile.sigma_crit_inv_eff(
+                self.cluster_statitstics_modeling.tabulated_integrands["ztrue"]
+            ),
+            (z_obs_edges_size, 1),
         )
-        for ind_z in range(z_obs_edges_size):
-            idx = self.profile._get_tomo_bin_index(z_obs_mean[ind_z])
-            effective_inverse_critical_surface_mass_density[ind_z] = (
-                self.profile.sigma_crit_inv_eff(
-                    self.cluster_statitstics_modeling.tabulated_integrands["ztrue"],
-                    idx,
-                )
-            )
 
         # output : (z_obs, lambda_obs, radius)
         opt_sel_corr = 1

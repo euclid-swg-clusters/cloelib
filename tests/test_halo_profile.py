@@ -99,17 +99,12 @@ def _test_profile(profile, reference_vals):
     )
     idx = np.array(
         [
-            profile._get_tomo_bin_index(mean_z_cl_test[i])
+            profile.get_tomo_bin_index(mean_z_cl_test[i])
             for i in range(mean_z_cl_test.size)
         ]
     )
     print("    n_zs_norM")
-    n_zs_norMs = np.array(
-        [
-            profile.n_zs_norM(mean_z_cl_test[i], idx[i])
-            for i in range(mean_z_cl_test.size)
-        ]
-    )
+    n_zs_norMs = np.array([profile.n_zs_norM(i) for i in idx])
     assert_allclose(n_zs_norMs, **reference_vals["n_zs_norM"], atol=1.0e-5)
     print("    n_zs")
     nzs = np.array(
@@ -117,15 +112,30 @@ def _test_profile(profile, reference_vals):
     )
     assert_allclose(nzs, **reference_vals["n_zs"], atol=1.0e-5)
     print("    sigma_crit_inv_eff")
+    # sources selected at the true redshift: tomographic bins 1, 3, 4, 5
     z_true_test = np.linspace(0.2, 1.0, 4)
+    assert_equal(
+        [profile.get_tomo_bin_index(z_true) for z_true in z_true_test], [1, 3, 4, 5]
+    )
     assert_allclose(
-        np.array([profile.sigma_crit_inv_eff(z_true_test, i) for i in idx]),
+        profile.sigma_crit_inv_eff(z_true_test),
         **reference_vals["sigma_crit_inv_eff"],
     )
+    # larger signal for the clusters just above an edge - Delta_z (one bin less,
+    # the sources in front of the cluster are removed); above the last one there
+    # are no sources (tested below)
+    for z_edge in profile.z_min_tomo_bin[:-1] - 0.05:
+        below, above = profile.sigma_crit_inv_eff(
+            np.array([z_edge - 1e-6, z_edge + 1e-6])
+        )
+        assert above > below > 0.0
     print("    sigma_crit_inv_eff without sources behind the cluster")
-    # no sources for z + Delta_z >= zs_max (Delta_z = 0.05): zero, not NaN
-    z_lens_edge = np.array([0.5, profile.zs_max - 0.05, profile.zs_max - 0.03])
-    sigma_crit_inv_eff = profile.sigma_crit_inv_eff(z_lens_edge, 0)
+    # no tomographic bin with lower edge above z + Delta_z, or z >= zs_max: zero
+    assert profile.get_tomo_bin_index(profile.z_min_tomo_bin[-1]) is None
+    z_lens_edge = np.array(
+        [0.5, profile.z_min_tomo_bin[-1], profile.zs_max, profile.zs_max + 0.1]
+    )
+    sigma_crit_inv_eff = profile.sigma_crit_inv_eff(z_lens_edge)
     assert np.all(np.isfinite(sigma_crit_inv_eff))
     assert sigma_crit_inv_eff[0] > 0.0
     assert_equal(sigma_crit_inv_eff[1:], 0.0)
@@ -185,28 +195,23 @@ def test_profiles():
             ],
             "rtol": 1e-5,
         },
+        # external values (scipy.stats.skewnorm), tomographic bins 1, 3, 4, 5
         "n_zs_norM": {
-            "desired": [1.12513478, 1.50243006, 1.28488508, 1.594103],
+            "desired": [1.04263605, 1.1052296, 1.22485153, 1.5682325],
             "rtol": 1e-5,
         },
         "n_zs": {
             "desired": [
-                [0.83347014, 0.7820134, 0.72356751, 0.66030692, 0.59431415],
-                [0.83347014, 0.7820134, 0.72356751, 0.66030692, 0.59431415],
-                [0.29190244, 0.5992073, 0.84143889, 0.92745609, 0.9132132],
-                [0.08161356, 0.18759727, 0.34873945, 0.53502114, 0.69604214],
+                [0.8297683, 0.85528035, 0.8339634, 0.78143239, 0.71159758],
+                [0.29190245, 0.5992073, 0.84143889, 0.92745608, 0.9132132],
+                [0.08161356, 0.18759727, 0.34873944, 0.53502114, 0.69604213],
+                [0.05745887, 0.08999008, 0.1344094, 0.19160809, 0.26094458],
             ],
             "rtol": 1e-5,
         },
-        # external values: independent integration with the same cosmology and n(z),
-        # (z_obs bin, z_true)
+        # external values: independent integration with the same cosmology and n(z)
         "sigma_crit_inv_eff": {
-            "desired": [
-                [1.883392e-04, 2.127746e-04, 1.761730e-04, 1.313648e-04],
-                [1.883392e-04, 2.127746e-04, 1.761730e-04, 1.313648e-04],
-                [2.183956e-04, 2.491429e-04, 1.910475e-04, 1.394622e-04],
-                [2.246384e-04, 2.723235e-04, 2.138418e-04, 1.486370e-04],
-            ],
+            "desired": [1.868098e-04, 2.474147e-04, 2.033727e-04, 1.513822e-04],
             "rtol": 1e-4,
         },
         "surface_mass_density": {
@@ -259,7 +264,7 @@ def test_source_redshift_distribution():
         mean_nz=np.array([0.3, 0.6]),
         sigma_nz=np.array([0.5, 0.7]),
         alpha_nz=np.array([2.0, 3.0]),
-        z_mean_tomo_bin=np.array([0.5, 0.9]),
+        z_min_tomo_bin=np.array([0.5, 0.9]),
     )
     z = np.array([0.3, 0.5])
 
@@ -273,8 +278,8 @@ def test_source_redshift_distribution():
         profile = profile_class(halo_model_properties, zs_max=2.0, **nz_kwargs)
         for name, value in nz_kwargs.items():
             assert_equal(getattr(profile, name), value)
-        assert profile._get_tomo_bin_index(0.4) == 0
-        assert profile._get_tomo_bin_index(0.6) == 1
+        assert profile.get_tomo_bin_index(0.4) == 0
+        assert profile.get_tomo_bin_index(0.6) == 1
         # same default parameters given explicitly: same result
         default = profile_class(halo_model_properties, zs_max=2.0)
         explicit = profile_class(
@@ -282,12 +287,8 @@ def test_source_redshift_distribution():
             zs_max=2.0,
             **{name: getattr(default, name) for name in nz_kwargs},
         )
-        assert_equal(
-            explicit.sigma_crit_inv_eff(z, 1), default.sigma_crit_inv_eff(z, 1)
-        )
-        assert np.all(
-            profile.sigma_crit_inv_eff(z, 1) != default.sigma_crit_inv_eff(z, 1)
-        )
+        assert_equal(explicit.sigma_crit_inv_eff(z), default.sigma_crit_inv_eff(z))
+        assert np.all(profile.sigma_crit_inv_eff(z) != default.sigma_crit_inv_eff(z))
         # inconsistent number of tomographic bins
         with assert_raises(ValueError):
             profile_class(halo_model_properties, mean_nz=np.array([0.3, 0.6]))
