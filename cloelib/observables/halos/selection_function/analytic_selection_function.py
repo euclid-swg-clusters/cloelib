@@ -280,12 +280,11 @@ class AnalyticSelectionFunction:
         sig2_l = sig_pure**2.0
         tau = self._tau_lambda_obs(z, lambda_true)
         f_prj = self._projection_fraction_lambda_obs(z, lambda_true)
-        erfc_arg1 = (mu + tau * sig2_l - lambda_obs) / np.sqrt(2 * sig2_l)
         exptau = np.exp(
             0.5 * tau * (2.0 * mu + tau * sig2_l - 2.0 * lambda_obs), dtype="float128"
         )
         pdf = (1.0 - f_prj) * gaussian(lambda_obs, mu, sig_pure) + exptau * spc.erfc(
-            erfc_arg1
+            (mu + tau * sig2_l - lambda_obs) / np.sqrt(2 * sig2_l)
         ) * (f_prj * tau / 2.0)
         return pdf
 
