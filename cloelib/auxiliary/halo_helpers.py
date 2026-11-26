@@ -951,3 +951,27 @@ def tabulated_return(reference_table, func, func_kwargs):
         reference_table["values"] = func(**func_kwargs)
 
     return reference_table["values"]
+
+
+def gaussian(value, mean, sigma):
+    """
+    Gaussian distibution(s)
+
+    Parameters
+    ----------
+    value: np.ndarray
+        Value to be evaluated on
+    mean: np.ndarray, float
+        Mean value of the distibution(s)
+    sigma: np.ndarray, float
+        Scatter of the distibution(s)
+
+
+    Returns
+    -------
+    np.ndarray, float
+        Gaussian distrubution evaluated at ``value``
+    """
+    return np.exp(-((value - mean) ** 2.0) / (2.0 * sigma**2.0)) / (
+        np.sqrt(2.0 * np.pi * sigma**2.0)
+    )

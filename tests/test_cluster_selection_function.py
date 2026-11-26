@@ -4,6 +4,9 @@ import os
 
 import numpy as np
 from numpy.testing import assert_allclose
+from scipy.integrate import simpson
+from scipy.stats import exponnorm, norm
+
 from cloelib.observables.halos.halo_mass_observable import (
     LognormalPowerLawHaloMassObservable,
     ShiftedPoissonHaloMassObservable,
@@ -11,6 +14,7 @@ from cloelib.observables.halos.halo_mass_observable import (
 from cloelib.observables.halos.selection_function import (
     GaussianSelectionFunction,
     NumericalSelectionFunction,
+    AnalyticSelectionFunction,
 )
 
 # get validation data
@@ -49,6 +53,47 @@ def _get_test_gaussian_sf():
         ),
         lambda_tab_integ=[31, 31, 31, 51],
         z_tab_integ=31,
+    )
+
+def _get_test_analytic_sf():
+    _lambda_true_dist_pars = dict(
+        A_l=52.0,
+        B_l=0.9,
+        C_l=0.5,
+        sig_A_l=0.2,
+        sig_B_l=-0.05,
+        sig_C_l=0.001,
+    )
+    _sel_pars = dict(
+        # scatter in lambda_obs
+        sig_lambda_norm=0.21,
+        sig_lambda_z=0.0,
+        sig_lambda_exponent=0.54,
+        # mean of lambda_obs
+        mu_lambda_norm=0.65,
+        mu_lambda_z=0.056,
+        mu_lambda_0=17.6,
+        # exponential tail slope
+        tau_lambda_norm=0.23,
+        tau_lambda_z=0.0,
+        tau_lambda_exponent= - 0.22,
+        # projected cluster fraction
+        fprj_lambda_norm=0.04,
+        fprj_lambda_z=-0.03,
+        fprj_lambda_exponent=0.02,
+        # scatter in z_obs
+        sig_z_lambda_exponent=-0.26,
+        sig_z_lambda_norm=0.0186,
+        sig_z_z_norm=0.006,
+        # quadrature
+        z_tab_integ=41,
+        lambda_tab_integ=[51],
+    )
+    return AnalyticSelectionFunction(
+        **_sel_pars,
+        halo_mass_observable=LognormalPowerLawHaloMassObservable(
+            **_lambda_true_dist_pars
+        ),
     )
 
 
@@ -368,6 +413,67 @@ def test_interpolated_selectionfunction_compare_with_gauss():
 
     assert_allclose(wf_g, wf_n, atol=2.5e-3)
 
+def test_analytical_selectionfunction_compare_with_tabulated_values():
+    
+    sf = _get_test_analytic_sf()
+
+    z_obs_edges      = np.array([0.5, 0.8])
+    lambda_obs_edges = np.array([40., 55.])
+    z_true           = np.arange(0.05, 1.05, 0.1)
+    lambda_true      = np.geomspace(5, 300, 50)
+    mass             = np.array([5.0e13, 1.0e14, 5.0e14])
+
+    # --- test window_redshift_richness_observed_given_lambda_true ---
+    wf_ltr = sf.window_redshift_lambda_observed(
+        z_obs_edges=z_obs_edges,
+        lambda_obs_edges=lambda_obs_edges,
+        z_true=z_true,
+        lambda_true=lambda_true,
+    )
+    # shape: (z_obs_bins, lambda_obs_bins, z_true, lambda_true) = (1, 1, 10, 50)
+    assert wf_ltr.shape == (1, 1, z_true.size, lambda_true.size), (
+        f"unexpected shape {wf_ltr.shape}"
+    )
+
+    # reference values at fixed (z_obs_bin=0, lambda_obs_bin=0, z_true[::3], lambda_true[::10])
+    wf_ltr_ref = np.array([[5.39475954e-060, 1.33203968e-137, 0.00000000e+000,
+        0.00000000e+000, 0.00000000e+000],
+       [1.07678194e-005, 2.06252565e-006, 2.17363812e-011,
+        8.09177270e-052, 1.00565778e-193],
+       [5.46648627e-005, 4.37501366e-004, 3.03891514e-003,
+        8.95067306e-001, 1.25435837e-044],
+       [2.35447974e-005, 6.65519003e-005, 5.69578591e-006,
+        5.95520128e-028, 9.69293555e-205]])
+    assert_allclose(wf_ltr[0, 0, ::3, ::10], wf_ltr_ref, atol=1e-6)
+
+    # sanity check: values should be in [0,1]
+    assert np.all(wf_ltr >= 0.), "window_redshift_lambda_observed has negative values"
+
+    # --- test window_redshift_richness_observed ---
+    wf = sf.window_redshift_richness_observed(
+        z_obs_edges=z_obs_edges,
+        lambda_obs_edges=lambda_obs_edges,
+        z_true=z_true,
+        mass=mass,
+        lambda_true=None,
+    )
+    # shape: (z_obs_bins, lambda_obs_bins, z_true, mass) = (1, 1, 10, 3)
+    assert wf.shape == (1, 1, z_true.size, mass.size), (
+        f"unexpected shape {wf.shape}"
+    )
+
+    # reference values at fixed (z_obs_bin=0, lambda_obs_bin=0)
+    # i.e. wf[0, 0, :, :] shape (z_true, mass) — replace with your actual reference values
+    wf_ref = np.array([[7.61599845e-036, 4.25536494e-045, 1.68165627e-110],
+       [4.25648499e-006, 2.61380513e-007, 2.64930039e-020],
+       [4.94060244e-004, 2.07331459e-003, 2.71621975e-001],
+       [5.74158191e-005, 2.31162812e-005, 7.68118646e-015]]
+    )
+
+    assert_allclose(wf[0,0,::3,:], wf_ref, atol=1.0e-5)
+
+    # sanity check: values should be non-negative
+    assert np.all(wf >= 0.), "window_redshift_richness_observed has negative values"
 
 def test_interpolated_selectionfunction_compare_with_tabulated_values():
     sel_cl_data = _gen_kde_selcl_data()
@@ -473,6 +579,126 @@ def test_interpolated_selectionfunction_compare_with_tabulated_values():
 
     assert_allclose(wf_n_ref, wf_n[0, 0, :, :], atol=1e-6)
 
+def test_analytical_selectionfunction_window_lambda_observed():
+
+    sf = _get_test_analytic_sf()
+    # large projected fraction, with a power law that exceeds 1 at high richness
+    sf.fprj_lambda_norm, sf.fprj_lambda_z, sf.fprj_lambda_exponent = 0.1, 0.2, 0.5
+
+    lambda_obs_edges = np.array([20., 40., 60., 90., 150.])
+    z_true = np.array([0.3, 0.7])
+    lambda_true = np.array([10., 30., 60., 120.])
+
+    f_prj = sf._fprj_lambda_obs(z_true[:, None], lambda_true[None, :])
+    assert np.all(f_prj <= 1.0) and np.any(f_prj == 1.0)
+
+    # closed form vs numerical integral of the PDF
+    wf = sf.window_lambda_observed(lambda_obs_edges, z_true, lambda_true)
+    wf_num = np.zeros_like(wf)
+    for b in range(lambda_obs_edges.size - 1):
+        lob = np.linspace(lambda_obs_edges[b], lambda_obs_edges[b + 1], 4001)
+        pdf = sf._prob_lambda_obs(
+            z_true[None, :, None], lambda_true[None, None, :], lob[:, None, None]
+        ).astype(float)
+        wf_num[b] = np.trapezoid(pdf, x=lob, axis=0)
+    assert_allclose(wf, wf_num, atol=1e-6)
+
+
+def test_analytical_selectionfunction_window_z_observed():
+    sf = _get_test_analytic_sf()
+    sf.lambda_tab_integ = [51, 201]
+
+    z_obs_edges = np.array([0.4, 0.6, 0.8, 1.0])
+    lambda_obs_edges = np.array([20.0, 30.0, 100.0])
+    z_true = np.array([0.35, 0.5, 0.75, 1.1])
+    lambda_true = np.geomspace(5.0, 300.0, 101)
+    args = (lambda_obs_edges, z_true, lambda_true)
+
+    window = sf.window_z_observed(z_obs_edges, *args)
+    assert window.shape == (3, 2, 4)
+
+    # it is a probability
+    assert np.all((window >= 0.0) & (window <= 1.0))
+    window_all = sf.window_z_observed(np.array([-np.inf, np.inf]), *args)
+    assert_allclose(window_all, 1.0, rtol=1e-12)
+
+    # independent integration of P(lob|ltr,ztr) P(zob|lob,ltr,ztr)
+    for b in range(lambda_obs_edges.size - 1):
+        lob = np.linspace(lambda_obs_edges[b], lambda_obs_edges[b + 1], 1001)
+        _lob, _ztr, _ltr = np.meshgrid(lob, z_true, lambda_true, indexing="ij")
+        mu = sf._mu_lambda_obs(_ztr, _ltr)
+        sig = sf._scatter_lambda_obs(_ztr, _ltr)
+        tau = sf._tau_lambda_obs(_ztr, _ltr)
+        f_prj = sf._fprj_lambda_obs(_ztr, _ltr)
+        # exponentially modified Gaussian, from scipy
+        p_lob = (1.0 - f_prj) * norm.pdf(_lob, mu, sig) + f_prj * exponnorm.pdf(
+            _lob, 1.0 / (sig * tau), loc=mu, scale=sig
+        )
+        sig_z = sf.scatter_z_obs(_lob, _ztr, _ltr)
+        norm_lob = np.trapezoid(np.trapezoid(p_lob, lob, axis=0), lambda_true, axis=-1)
+        for ind_z in range(z_obs_edges.size - 1):
+            p_zob = norm.cdf(z_obs_edges[ind_z + 1], _ztr, sig_z) - norm.cdf(
+                z_obs_edges[ind_z], _ztr, sig_z
+            )
+            ref = np.trapezoid(
+                np.trapezoid(p_lob * p_zob, lob, axis=0), lambda_true, axis=-1
+            )
+            assert_allclose(window[ind_z, b], ref / norm_lob, atol=1e-3)
+
+    # if the scatter of z_obs does not depend on richness, the window does not
+    # depend on it either (as in the Gaussian selection function)
+    sf.sig_z_lambda_exponent, sf.sig_z_z_norm = 0.0, 0.0
+    cdf = norm.cdf(z_obs_edges[:, np.newaxis], z_true, sf.sig_z_lambda_norm)
+    assert_allclose(
+        sf.window_z_observed(z_obs_edges, *args),
+        np.diff(cdf, axis=0)[:, np.newaxis, :].repeat(2, axis=1),
+        rtol=1e-8,
+        atol=1e-12,
+    )
+
+
+def test_analytical_selectionfunction_window_redshift_lambda_observed():
+    sf = _get_test_analytic_sf()
+
+    z_obs_edges = np.array([0.4, 0.6, 0.8, 1.0])
+    z_true = np.array([0.35, 0.5, 0.75, 1.1])
+    lambda_true = np.geomspace(5.0, 500.0, 41)
+
+    # narrow and wide richness bins
+    for lambda_obs_edges in (
+        np.array([30.0, 60.0, 90.0, 150.0, 300.0]),
+        np.array([20.0, 30.0, 45.0, 60.0, 500.0]),
+    ):
+        sf.lambda_tab_integ = [32, 32, 32, 32]
+        args = (lambda_obs_edges, z_true, lambda_true)
+        window = sf.window_redshift_lambda_observed(z_obs_edges, *args)
+        assert window.shape == (3, 4, 4, 41)
+
+        # all z_obs: closed-form window in lambda_obs
+        window_all = sf.window_redshift_lambda_observed(
+            np.array([-np.inf, np.inf]), *args
+        )
+        assert_allclose(window_all[0], sf.window_lambda_observed(*args), atol=1e-14)
+
+        # independent integration of P(lob|ltr,ztr) P(zob|lob,ltr,ztr)
+        for b in range(lambda_obs_edges.size - 1):
+            lob = np.geomspace(lambda_obs_edges[b], lambda_obs_edges[b + 1], 4001)
+            _lob, _ztr, _ltr = np.meshgrid(lob, z_true, lambda_true, indexing="ij")
+            mu = sf._mu_lambda_obs(_ztr, _ltr)
+            sig = sf._scatter_lambda_obs(_ztr, _ltr)
+            tau = sf._tau_lambda_obs(_ztr, _ltr)
+            f_prj = sf._fprj_lambda_obs(_ztr, _ltr)
+            p_lob = (1.0 - f_prj) * norm.pdf(_lob, mu, sig) + f_prj * exponnorm.pdf(
+                _lob, 1.0 / (sig * tau), loc=mu, scale=sig
+            )
+            sig_z = sf.scatter_z_obs(_lob, _ztr, _ltr)
+            for ind_z in range(z_obs_edges.size - 1):
+                p_zob = norm.cdf(z_obs_edges[ind_z + 1], _ztr, sig_z) - norm.cdf(
+                    z_obs_edges[ind_z], _ztr, sig_z
+                )
+                ref = simpson(p_lob * p_zob, x=lob, axis=0)
+                assert_allclose(window[ind_z, b], ref, atol=2e-5)
+
 
 if __name__ == "__main__":
     print("test_gaussian_selectionfunction")
@@ -484,5 +710,17 @@ if __name__ == "__main__":
     print("Comparison with Gaussian SF")
     test_interpolated_selectionfunction_compare_with_gauss()
 
+    print("Comparison with Analytic SF")
+    test_analytical_selectionfunction_compare_with_tabulated_values()
+
     print("Comparison with mock tabulated SF")
     test_interpolated_selectionfunction_compare_with_tabulated_values()
+
+    print("Analytic SF: closed-form window in lambda_obs")
+    test_analytical_selectionfunction_window_lambda_observed()
+
+    print("Analytic SF: window in z_obs")
+    test_analytical_selectionfunction_window_z_observed()
+
+    print("Analytic SF: window in z_obs and lambda_obs")
+    test_analytical_selectionfunction_window_redshift_lambda_observed()
