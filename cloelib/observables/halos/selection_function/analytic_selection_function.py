@@ -3,6 +3,7 @@
 import numpy as np
 import scipy.special as spc
 
+from cloelib.auxiliary.halo_helpers import gaussian
 from cloelib.observables.halos.halo_mass_observable import (
     HaloMassObservable,
 )
@@ -247,12 +248,6 @@ class AnalyticSelectionFunction:
             1.0,
         )
 
-    @staticmethod
-    def _gaussian(value, mean, sigma):
-        return np.exp(-((value - mean) ** 2.0) / (2.0 * sigma**2.0)) / (
-            np.sqrt(2.0 * np.pi * sigma**2.0)
-        )
-
     def _prob_lambda_obs(self, z, lambda_true, lambda_obs):
         r"""
         Observed mass proxy PDF.
@@ -289,9 +284,9 @@ class AnalyticSelectionFunction:
         exptau = np.exp(
             0.5 * tau * (2.0 * mu + tau * sig2_l - 2.0 * lambda_obs), dtype="float128"
         )
-        pdf = (1.0 - f_prj) * self._gaussian(
-            lambda_obs, mu, sig_pure
-        ) + exptau * spc.erfc(erfc_arg1) * (f_prj * tau / 2.0)
+        pdf = (1.0 - f_prj) * gaussian(lambda_obs, mu, sig_pure) + exptau * spc.erfc(
+            erfc_arg1
+        ) * (f_prj * tau / 2.0)
         return pdf
 
     def scatter_z_obs(self, lambda_obs, z, lambda_true=None, z_pivot=0.2):
@@ -361,7 +356,7 @@ class AnalyticSelectionFunction:
         numpy.ndarray
             Observed redshift PDF.
         """
-        return self._gaussian(
+        return gaussian(
             z_obs, z_true, self.scatter_z_obs(lambda_obs, z_true, lambda_true)
         )
 

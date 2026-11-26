@@ -3,6 +3,7 @@
 import numpy as np
 from scipy.integrate import simpson
 
+from cloelib.auxiliary.halo_helpers import gaussian
 from cloelib.observables.halos.halo_mass_observable import (
     HaloMassObservable,
 )
@@ -77,12 +78,6 @@ class GaussianSelectionFunction:
             self.sig_lambda_norm + self.sig_lambda_z * z
         ) * lambda_true**self.sig_lambda_exponent
 
-    @staticmethod
-    def _gaussian(value, mean, sigma):
-        return np.exp(-((value - mean) ** 2.0) / (2.0 * sigma**2.0)) / (
-            np.sqrt(2.0 * np.pi * sigma**2.0)
-        )
-
     def _prob_lambda_obs(self, z, lambda_true, lambda_obs):
         r"""
         Observed mass proxy PDF.
@@ -104,7 +99,7 @@ class GaussianSelectionFunction:
         prob_lambda_obs: numpy.ndarray
             Observed mass proxy PDF.
         """
-        return self._gaussian(
+        return gaussian(
             lambda_obs, lambda_true, self._scatter_lambda_obs(z, lambda_true)
         )
 
@@ -150,7 +145,7 @@ class GaussianSelectionFunction:
         numpy.ndarray
             Observed redshift PDF.
         """
-        return self._gaussian(z_obs, z, self.scatter_z_obs(lambda_obs, z))
+        return gaussian(z_obs, z, self.scatter_z_obs(lambda_obs, z))
 
     def window_z_observed(
         self, z_obs_edges, lambda_obs_edges, z_true, lambda_true=None
