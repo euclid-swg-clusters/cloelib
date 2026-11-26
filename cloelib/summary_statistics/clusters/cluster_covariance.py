@@ -593,6 +593,7 @@ class ClusterWeakLensingCovariance:
         sigma_e: float = 0.3,
         nonlinear_perturbations: Perturbations = None,
         source_delta_z: float = 0.05,
+        source_selection: str = "z_true",
         ell: np.ndarray = np.geomspace(1.0, 2.0e5, 1500),
         z_los: np.ndarray = None,
         z_sources_size: int = 200,
@@ -637,10 +638,19 @@ class ClusterWeakLensingCovariance:
             used for C_ell^kappakappa. If None, the linear matter power spectrum
             of the matter statistics perturbations is used.
         source_delta_z : float
-            Redshift buffer of the source selection: the source sample of the
-            clusters in an observed redshift bin starts at the first tomographic
-            bin with lower edge larger than the center of the bin plus
-            source_delta_z (see `HaloProfileBase.get_tomo_bin_index`).
+            Redshift buffer of the source selection: the source sample of a
+            cluster at redshift z starts at the first tomographic bin with lower
+            edge larger than z + source_delta_z (see
+            `HaloProfileBase.get_tomo_bin_index`).
+        source_selection : str
+            Redshift at which the source sample of the clusters in an observed
+            redshift bin is selected:
+
+                * "z_true" : at the true redshift of each cluster, as in `get_gt`.
+                  Clusters at different true redshifts of the same observed
+                  redshift bin can have different source samples.
+                * "z_obs_center" : at the center of the observed redshift bin
+                  (single source sample).
         ell : numpy.ndarray
             Multipoles used in the ell integration (log-spaced recommended).
         z_los : numpy.ndarray, None
@@ -662,12 +672,26 @@ class ClusterWeakLensingCovariance:
         - The 1-halo term of the halo-matter power spectrum uses a truncated NFW
           profile with the halo concentration of ``cluster_weak_lensing``.
         - Distances assume a flat universe, as in the volume element.
+        - Source samples (see `source_selection`): with the Limber approximation,
+          correlated pairs of clusters are at the same true redshift, hence have
+          the same source sample, which enters the C_ell^hh terms inside the
+          redshift integral. The lens shot-noise terms (same cluster) are
+          averaged over the source samples of the clusters, and the intrinsic
+          term couples the halos with the source samples of the other clusters.
+          Clusters without tomographic source bins have zero signal (as in
+          `get_gt`) and do not contribute to the covariance.
         """
         self.cluster_weak_lensing = cluster_weak_lensing
         self.n_eff = n_eff
         self.sigma_e = sigma_e
         self.nonlinear_perturbations = nonlinear_perturbations
         self.source_delta_z = source_delta_z
+        if source_selection not in ("z_true", "z_obs_center"):
+            raise ValueError(
+                "source_selection must be 'z_true' or 'z_obs_center', "
+                f"got {source_selection}."
+            )
+        self.source_selection = source_selection
         self.ell = ell
         self.z_los = (
             np.linspace(1.0e-3, self.profile.zs_max, 50) if z_los is None else z_los
@@ -743,52 +767,77 @@ class ClusterWeakLensingCovariance:
             z_sources[np.newaxis, :] > z_lens[:, np.newaxis], inv_sig_crit, 0.0
         )
 
-    def _source_window(self, z_lens, z_obs_mean):
-        r"""Lensing window function of the source sample of each observed
-        redshift bin (Wu et al. 2019, Eq. 7):
+    def _source_windows(self, z_lens):
+        r"""Lensing window function of the source sample starting at each
+        tomographic bin t (Wu et al. 2019, Eq. 7):
 
         ..math:
-            F_\kappa(z) = \bar\rho_m \int_0^{z_{s,\max}} dz_s\, p(z_s)\,
+            F_\kappa^t(z) = \bar\rho_m \int_0^{z_{s,\max}} dz_s\, p_t(z_s)\,
             \Sigma_{\rm crit, com}^{-1}(z, z_s)
 
-        with p(z_s) the redshift distribution of the galaxies in the tomographic
-        bins t, t+1, ..., where t is selected at z_obs_mean, normalized in
-        [0, zs_max] as in `HaloProfileBase.sigma_crit_inv_eff` (the sources in
-        front of the lens do not contribute).
+        with p_t(z_s) the redshift distribution of the galaxies in the
+        tomographic bins t, t+1, ..., normalized in [0, zs_max] as in
+        `HaloProfileBase.sigma_crit_inv_eff` (the sources in front of the lens
+        do not contribute).
 
         Parameters
         ----------
         z_lens : numpy.ndarray
             Redshifts where the window is evaluated.
-        z_obs_mean : numpy.ndarray
-            Mean redshift of the observed redshift bins.
 
         Returns
         -------
         F_kappa : numpy.ndarray
-            Lensing window function (units: h / Mpc), zero for the bins without
-            tomographic source bins. Shape: (z_obs, z_lens).
+            Lensing window function (units: h / Mpc). Shape: (tomo_bins, z_lens).
         n_sources : numpy.ndarray
-            Source surface number density (units: sr^-1), zero for the bins
-            without tomographic source bins. Shape: (z_obs,).
+            Source surface number density (units: sr^-1). Shape: (tomo_bins,).
         """
-        F_kappa = np.zeros((z_obs_mean.size, z_lens.size))
-        n_sources = np.zeros(z_obs_mean.size)
-        n_eff = np.broadcast_to(self.n_eff, self.profile.z_min_tomo_bin.shape)
+        n_tomo = self.profile.z_min_tomo_bin.size
         z_s = np.linspace(0.0, self.profile.zs_max, self.z_sources_size)
         with np.errstate(divide="ignore", invalid="ignore"):
             inv_sig_crit = self._inverse_sigma_crit_comoving(z_lens, z_s)
-        for ind_z, z_obs in enumerate(z_obs_mean):
-            idx = self.profile.get_tomo_bin_index(z_obs, self.source_delta_z)
-            if idx is None:
-                continue
-            p_zs = self.profile.n_zs_norM(idx) * self.profile.n_zs(z_s, idx)
-            F_kappa[ind_z] = self.mean_matter_density * simpson(
-                p_zs * inv_sig_crit, x=z_s, axis=1
-            )
-            # gal/arcmin^2 -> gal/sr
-            n_sources[ind_z] = n_eff[idx] * (180.0 * 60.0 / np.pi) ** 2.0
+        F_kappa = np.array(
+            [
+                self.mean_matter_density
+                * self.profile.n_zs_norM(idx)
+                * simpson(self.profile.n_zs(z_s, idx) * inv_sig_crit, x=z_s, axis=1)
+                for idx in range(n_tomo)
+            ]
+        )
+        # gal/arcmin^2 -> gal/sr
+        n_sources = (
+            np.broadcast_to(self.n_eff, (n_tomo,)) * (180.0 * 60.0 / np.pi) ** 2.0
+        )
         return F_kappa, n_sources
+
+    def _source_assignment(self, z_obs_edges):
+        r"""Tomographic bin t where the source sample of the clusters at each
+        true redshift of an observed redshift bin starts (see `source_selection`).
+
+        Parameters
+        ----------
+        z_obs_edges : numpy.ndarray
+            Edges of redshift bins.
+
+        Returns
+        -------
+        numpy.ndarray
+            Index of the first tomographic bin, -1 if there are no source bins.
+            Shape: (z_obs, ztrue).
+        """
+        z_true = self.cluster_statitstics_modeling.tabulated_integrands["ztrue"]
+        if self.source_selection == "z_true":
+            z_sel = np.tile(z_true, (len(z_obs_edges) - 1, 1))
+        else:
+            z_bin = 0.5 * (z_obs_edges[:-1] + z_obs_edges[1:])
+            z_sel = np.repeat(z_bin[:, np.newaxis], z_true.size, axis=1)
+        tomo_bins = [
+            self.profile.get_tomo_bin_index(z, self.source_delta_z)
+            for z in z_sel.flatten()
+        ]
+        return np.array([-1 if t is None else t for t in tomo_bins]).reshape(
+            z_sel.shape
+        )
 
     @staticmethod
     def _limber_power_spectrum(pk_table, k_table, z_chi, ell):
@@ -968,13 +1017,23 @@ class ClusterWeakLensingCovariance:
             ),
         }
 
-    def _cl_hh(self, lens_sample, pk_lin_limber):
+    def _cl_hh(self, lens_sample, pk_lin_limber, factor):
         r"""Halo-halo angular power spectrum (Wu et al. 2019, Eq. 5), with
-        :math:`P_{hh} = b_{\rm eff}^i b_{\rm eff}^j P_{\rm lin}`:
+        :math:`P_{hh} = b_{\rm eff}^i b_{\rm eff}^j P_{\rm lin}`, multiplied by
+        a redshift-dependent factor X (source term of the clusters at z):
 
         ..math:
-            C_\ell^{h_ih_j} = \int dz \frac{p_i(z)b_i(z)\,p_j(z)b_j(z)}{dV/dzd\Omega}
-            P_{\rm lin}\left(\frac{\ell+1/2}{\chi(z)}, z\right)
+            \int dz \frac{p_i(z)b_i(z)\,p_j(z)b_j(z)}{dV/dzd\Omega}
+            P_{\rm lin}\left(\frac{\ell+1/2}{\chi(z)}, z\right) X(z, \ell)
+
+        Parameters
+        ----------
+        lens_sample : dict
+            Output of `_lens_sample`.
+        pk_lin_limber : numpy.ndarray
+            Linear power spectrum at the Limber wavenumber, shape (ztrue, ell).
+        factor : numpy.ndarray
+            X, shape (z_obs, ztrue, ell) or (z_obs, ztrue, 1).
 
         Returns
         -------
@@ -991,24 +1050,40 @@ class ClusterWeakLensingCovariance:
                 * bias_dN_dz[:, np.newaxis, :, :]
                 / dV_dzdO
             )[..., np.newaxis]
-            * pk_lin_limber,
+            * pk_lin_limber
+            * factor[:, np.newaxis, np.newaxis, :, :],
             x=z_true,
             axis=3,
         )
 
-    def _cl_hkappa(self, lens_sample, pk_lin_limber, F_kappa_ztrue):
+    def _cl_hkappa(self, lens_sample, pk_lin_limber, F_kappa_ztrue, assignment):
         r"""Halo-convergence angular power spectrum (Wu et al. 2019, Eq. 8), with
-        the halo-matter power spectrum given by the 1-halo (NFW) and 2-halo terms:
+        the halo-matter power spectrum given by the 1-halo (NFW) and 2-halo terms,
+        for the halos with source sample s and the convergence of the source
+        sample t:
 
         ..math:
-            C_\ell^{h_i\kappa} = \int dz\, p_i(z) \frac{F_\kappa(z)}{\chi^2(z)}
+            C_\ell^{h_i^s\kappa_t} = \int dz\, p_i(z) \delta_{s, s(z)}
+            \frac{F_\kappa^t(z)}{\chi^2(z)}
             \left[\frac{1}{n_i(z)}\int dM \frac{dn}{dM} W_i(M,z)\frac{M}{\bar\rho_{cb}}u(k|M,z)
             + b_i(z) P_{\rm lin}(k, z)\right]_{k=(\ell+1/2)/\chi(z)}
+
+        Parameters
+        ----------
+        lens_sample : dict
+            Output of `_lens_sample`.
+        pk_lin_limber : numpy.ndarray
+            Linear power spectrum at the Limber wavenumber, shape (ztrue, ell).
+        F_kappa_ztrue : numpy.ndarray
+            Lensing window of the source samples, shape (tomo_bins, ztrue).
+        assignment : numpy.ndarray
+            Output of `_source_assignment`, shape (z_obs, ztrue).
 
         Returns
         -------
         numpy.ndarray
-            Shape: (z_obs, lambda_obs, ell).
+            Zero for the source samples not used. Shape: (z_obs, lambda_obs,
+            tomo_bins s, tomo_bins t, ell).
         """
         csm = self.cluster_statitstics_modeling
         z_true = csm.tabulated_integrands["ztrue"]
@@ -1056,12 +1131,20 @@ class ClusterWeakLensingCovariance:
         # 2-halo term times p_i(z) : (z_obs, lambda_obs, ztrue, ell)
         p_hm_2h = lens_sample["bias_dN_dz"][..., np.newaxis] * pk_lin_limber
 
-        return simpson(
-            (F_kappa_ztrue / chi**2.0)[:, np.newaxis, :, np.newaxis]
-            * (p_hm_1h + p_hm_2h),
-            x=z_true,
-            axis=2,
-        )
+        p_hm = (p_hm_1h + p_hm_2h) / chi[:, np.newaxis] ** 2.0
+
+        # source samples of the clusters with nonzero density
+        n_tomo = F_kappa_ztrue.shape[0]
+        _has_clusters = np.any(lens_sample["dN_dz"] > 0.0, axis=1)
+        used = [t for t in range(n_tomo) if np.any((assignment == t) & _has_clusters)]
+        cl_hk = np.zeros(p_hm.shape[:2] + (n_tomo, n_tomo, self.ell.size))
+        for s in used:
+            p_hm_s = p_hm * (assignment == s)[:, np.newaxis, :, np.newaxis]
+            for t in used:
+                cl_hk[:, :, s, t] = simpson(
+                    F_kappa_ztrue[t][:, np.newaxis] * p_hm_s, x=z_true, axis=2
+                )
+        return cl_hk
 
     def _cl_kappakappa(self, F_kappa_los):
         r"""Convergence angular power spectrum (Wu et al. 2019, Eq. 6):
@@ -1073,7 +1156,7 @@ class ClusterWeakLensingCovariance:
         Returns
         -------
         numpy.ndarray
-            Shape: (z_obs, ell).
+            Shape: (F_kappa_los.shape[0], ell).
         """
         h = self.background.h
         chi = self._comoving_distance(self.z_los)
@@ -1153,7 +1236,6 @@ class ClusterWeakLensingCovariance:
         z_obs_edges_size = len(z_obs_edges) - 1
         lambda_obs_edges_size = len(lambda_obs_edges) - 1
         radius_edges_size = len(radius_edges) - 1
-        z_obs_mean = 0.5 * (z_obs_edges[:-1] + z_obs_edges[1:])
 
         ##############################
         # Lens and source sample
@@ -1164,9 +1246,21 @@ class ClusterWeakLensingCovariance:
         # lens surface density in sr^-1 : (z_obs, lambda_obs)
         n_lens = lens_sample["cluster_counts"] / self.survey_solid_angle
 
-        # lensing window functions : (z_obs, ztrue), (z_obs, z_los)
-        F_kappa_ztrue, n_sources = self._source_window(z_true, z_obs_mean)
-        F_kappa_los, _ = self._source_window(self.z_los, z_obs_mean)
+        # lensing window functions and number density of the source samples
+        # starting at each tomographic bin : (tomo, ztrue), (tomo, z_los), (tomo,)
+        F_kappa_ztrue, n_sources = self._source_windows(z_true)
+        F_kappa_los, _ = self._source_windows(self.z_los)
+        # source sample of the clusters at each true redshift : (z_obs, ztrue)
+        assignment = self._source_assignment(z_obs_edges)
+        # masks of the clusters with source sample t : (tomo, z_obs, ztrue)
+        masks = np.array([assignment == t for t in range(n_sources.size)], dtype=float)
+        # fraction of the clusters of each bin with source sample t : (z_obs, lambda_obs, tomo)
+        source_fractions = simpson(
+            lens_sample["dN_dz"][:, :, np.newaxis, :]
+            * masks.transpose(1, 0, 2)[:, np.newaxis, :, :],
+            x=z_true,
+            axis=3,
+        )
 
         ##############################
         # Angular power spectra
@@ -1179,15 +1273,29 @@ class ClusterWeakLensingCovariance:
             chi_true,
             self.ell,
         )
-        # (z_obs, lambda_obs, lambda_obs, ell)
-        cl_hh = self._cl_hh(lens_sample, pk_lin_limber)
-        # (z_obs, lambda_obs, ell)
-        cl_hk = self._cl_hkappa(lens_sample, pk_lin_limber, F_kappa_ztrue)
-        # (z_obs, ell)
+        # convergence of each source sample : (tomo, ell)
         cl_kk = self._cl_kappakappa(F_kappa_los)
+        # shape noise of each source sample : (tomo,)
+        shape_noise_sources = self.sigma_e**2.0 / n_sources
+
+        # pairs of clusters (same true redshift, i.e. same source sample) :
+        # (z_obs, lambda_obs, lambda_obs, ell)
+        cl_hh_shape = self._cl_hh(
+            lens_sample,
+            pk_lin_limber,
+            np.einsum("tzx,t->zx", masks, shape_noise_sources)[..., np.newaxis],
+        )
+        cl_hh_kk = self._cl_hh(
+            lens_sample, pk_lin_limber, np.einsum("tzx,tl->zxl", masks, cl_kk)
+        )
+        # halos with source sample s and convergence of the source sample t :
+        # (z_obs, lambda_obs, tomo s, tomo t, ell)
+        cl_hk = self._cl_hkappa(lens_sample, pk_lin_limber, F_kappa_ztrue, assignment)
 
         if not cross_richness:
-            cl_hh *= np.identity(lambda_obs_edges_size)[np.newaxis, :, :, np.newaxis]
+            _identity = np.identity(lambda_obs_edges_size)[np.newaxis, :, :, np.newaxis]
+            cl_hh_shape *= _identity
+            cl_hh_kk *= _identity
 
         # lens shot noise : (z_obs, lambda_obs, lambda_obs)
         shot_noise_lens = np.divide(
@@ -1198,21 +1306,20 @@ class ClusterWeakLensingCovariance:
             ),
             where=n_lens[:, :, np.newaxis] != 0,
         )
-        # zero in the bins without sources (zero signal)
-        shape_noise_sources = np.divide(
-            self.sigma_e**2.0,
-            n_sources,
-            out=np.zeros(n_sources.shape),
-            where=n_sources > 0,
-        )[:, np.newaxis, np.newaxis, np.newaxis]
+        # same cluster, averaged over the source samples of the clusters :
+        # (z_obs, lambda_obs, 1, 1, 1), (z_obs, lambda_obs, ell)
+        shape_noise_auto = (source_fractions @ shape_noise_sources)[
+            :, :, np.newaxis, np.newaxis, np.newaxis
+        ]
+        cl_kk_auto = source_fractions @ cl_kk
 
         # integrands in ell : (z_obs, lambda_obs, lambda_obs, ell)
         # the lens shot noise x shape noise term is computed analytically below
         _integrands = {
-            "shape": cl_hh * shape_noise_sources,
-            "lss": (cl_hh + shot_noise_lens[..., np.newaxis])
-            * cl_kk[:, np.newaxis, np.newaxis, :],
-            "intr": cl_hk[:, :, np.newaxis, :] * cl_hk[:, np.newaxis, :, :],
+            "shape": cl_hh_shape,
+            "lss": cl_hh_kk
+            + shot_noise_lens[..., np.newaxis] * cl_kk_auto[:, :, np.newaxis, :],
+            "intr": np.einsum("zistl,zjtsl->zijl", cl_hk, cl_hk),
         }
         if not cross_richness:
             _integrands["intr"] *= np.identity(lambda_obs_edges_size)[
@@ -1254,7 +1361,7 @@ class ClusterWeakLensingCovariance:
         )
         terms["shape"] += (
             shot_noise_lens[..., np.newaxis, np.newaxis]
-            * shape_noise_sources[..., np.newaxis]
+            * shape_noise_auto
             / (4.0 * np.pi * fsky)
             * (np.identity(radius_edges_size) / annulus_area[:, :, np.newaxis, :])[
                 :, np.newaxis, :, :, :

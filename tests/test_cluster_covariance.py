@@ -263,9 +263,42 @@ def test_gt_covariance():
         rtol=1e-12,
     )
 
+    print("    source samples")
+    # in the first z_obs bin the clusters at z_true < 0.38 have a different
+    # source sample than the bin center
+    cov_center = ClusterWeakLensingCovariance(
+        cluster_wl, n_eff=15.0, sigma_e=0.3, source_selection="z_obs_center"
+    ).get_gt_covariance(z_obs_edges, lambda_obs_edges, radius_edges)
+    assert np.abs(cov_center[0, 0] / cov[0, 0] - 1.0).max() > 1.0e-2
+    # same source sample for all the clusters: the options coincide
+    single_sample_profile = NFWHaloProfile(
+        halo_model_properties,
+        two_halo="None",
+        zs_max=2.0,
+        mean_nz=profile.mean_nz[:2],
+        sigma_nz=profile.sigma_nz[:2],
+        alpha_nz=profile.alpha_nz[:2],
+        z_min_tomo_bin=np.array([0.0, 1.5]),
+    )
+    single_sample_wl = ClusterWeakLensing(
+        cluster_statistics_modeling, single_sample_profile, halo_concentration=4.0
+    )
+    cov_single = {
+        source_selection: ClusterWeakLensingCovariance(
+            single_sample_wl,
+            n_eff=np.array([20.0, 15.0]),
+            sigma_e=0.3,
+            source_selection=source_selection,
+        ).get_gt_covariance(z_obs_edges, lambda_obs_edges, radius_edges)
+        for source_selection in ("z_true", "z_obs_center")
+    }
+    assert_allclose(cov_single["z_obs_center"], cov_single["z_true"], rtol=1e-10)
+    with assert_raises(ValueError):
+        ClusterWeakLensingCovariance(cluster_wl, source_selection="z_obs")
+
     print("    comparison with external values")
-    # independent implementation of Wu et al. 2019 (notebook
-    # "Test Covariance lensing gammat.ipynb")
+    # independent implementation of the code (Wu et al. 2019), sources selected
+    # at the center of the z_obs bins
     cov_reference = np.array(
         [
             [
@@ -304,7 +337,7 @@ def test_gt_covariance():
     )
     cov_auto_blocks = np.array(
         [
-            [cov[iz, iz, il, il] for il in range(lambda_size)]
+            [cov_center[iz, iz, il, il] for il in range(lambda_size)]
             for iz in range(z_size)
         ]
     )
