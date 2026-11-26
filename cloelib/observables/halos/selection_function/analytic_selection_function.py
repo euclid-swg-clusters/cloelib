@@ -529,23 +529,26 @@ class AnalyticSelectionFunction:
 
         mu = self._mu_lambda_obs(_z_true, _lambda_true)
         sig = self._scatter_lambda_obs(_z_true, _lambda_true)
-        sig2 = sig**2.0
         tau = self._tau_lambda_obs(_z_true, _lambda_true)
         f_prj = self._fprj_lambda_obs(_z_true, _lambda_true)
 
-        def _cdf(lob):
-            # Gaussian CDF: Phi((lob-mu)/sigma)
-            gauss_cdf = 0.5 * (1.0 + spc.erf((lob - mu) / (np.sqrt(2.0) * sig)))
+        return (
+            self._cdf(_lob_high, mu, sig, tau, f_prj)
+            - self._cdf(_lob_low, mu, sig, tau, f_prj)
+        ).astype(float)
 
-            # EMG correction: exp[-tau*(lob-mu) + 0.5*tau^2*sig^2] * Phi((lob-mu)/sig - tau*sig)
-            exp_arg = -tau * (lob - mu) + 0.5 * tau**2.0 * sig2
-            phi_arg = (lob - mu) / (np.sqrt(2.0) * sig) - tau * sig / np.sqrt(2.0)
-            exp_cdf = np.exp(exp_arg, dtype="float128") * 0.5 * (1.0 + spc.erf(phi_arg))
+    @staticmethod
+    def _cdf(lob, mu, sig, tau, f_prj):
+        # Gaussian CDF: Phi((lob-mu)/sigma)
+        gauss_cdf = 0.5 * (1.0 + spc.erf((lob - mu) / (np.sqrt(2.0) * sig)))
 
-            # mixture: (1 - f_prj) * gauss_cdf + f_prj * (gauss_cdf - exp_cdf)
-            return gauss_cdf - f_prj * exp_cdf
+        # EMG correction: exp[-tau*(lob-mu) + 0.5*tau^2*sig^2] * Phi((lob-mu)/sig - tau*sig)
+        exp_arg = -tau * (lob - mu) + 0.5 * tau**2.0 * sig**2.0
+        phi_arg = (lob - mu) / (np.sqrt(2.0) * sig) - tau * sig / np.sqrt(2.0)
+        exp_cdf = np.exp(exp_arg, dtype="float128") * 0.5 * (1.0 + spc.erf(phi_arg))
 
-        return (_cdf(_lob_high) - _cdf(_lob_low)).astype(float)
+        # mixture: (1 - f_prj) * gauss_cdf + f_prj * (gauss_cdf - exp_cdf)
+        return gauss_cdf - f_prj * exp_cdf
 
     def window_richness_observed(
         self,
