@@ -42,7 +42,7 @@ class AnalyticSelectionFunction:
         `Costanzi et al. 2019 <https://arxiv.org/abs/1807.07072>`_ and accounts for
         projection effects.
 
-        The observed richness PDF is expressed as follows:
+        The observed richness probability distribution function is expressed as follows:
 
         ..math:
         P(\lambda_{\rm ob} | \lambda,z)= (1-f_{\rm prj}) \mathcal{N}(\mu,\sigma)
@@ -55,7 +55,7 @@ class AnalyticSelectionFunction:
         f_{\rm prj}(\lambda, z) = \min\left[1,
         f_{\rm prj,0} \lambda^{[f_{\rm prj,exp}+f_{\rm prj,z} z]}\right]\,,
 
-        while $\mathcal{N}(\mu,\sigma)$ is a Gaussian PDF with $\mu$ and $\sigma$ defined as
+        while $\mathcal{N}(\mu,\sigma)$ is a Gaussian probability distribution function with $\mu$ and $\sigma$ defined as
 
         ..math:
         \mu(\lambda,z) = \max\left[1,
@@ -69,10 +69,10 @@ class AnalyticSelectionFunction:
         ..math:
         \tau(\lambda,z) = (\tau_0 + z\tau_z)  \lambda^{\tau_{\rm exp}}
 
-        If $f_{\rm prj}=0$, the observed richness PDF reduces to the Gaussian
+        If $f_{\rm prj}=0$, the observed richness probability distribution function reduces to the Gaussian
         $\mathcal{N}(\mu,\sigma)$.
 
-        The observed redshift PDF is Gaussian with a mean equal to the
+        The observed redshift probability distribution function is Gaussian with a mean equal to the
         true redshift and a standard deviation expressed as follows:
 
         ..math:
@@ -110,11 +110,11 @@ class AnalyticSelectionFunction:
         fprj_lambda_exponent: float
             $f_{\rm prj,exp}$ in the formula of $f_{\rm prj}$
         sig_z_lambda_exponent: float
-            Exponent in the richness-dependent part of the $z_{\rm ob}$ PDF ($\varsigma_{\rm exp}$)
+            Exponent in the richness-dependent part of the $z_{\rm ob}$ probability distribution function ($\varsigma_{\rm exp}$)
         sig_z_lambda_norm: float
-            Amplitude of the richness-dependent part of the $z_{\rm ob}$ PDF ($\varsigma_0$)
+            Amplitude of the richness-dependent part of the $z_{\rm ob}$ probability distribution function ($\varsigma_0$)
         sig_z_z_norm: float
-            Amplitude of the $z_{\rm ob}$ PDF ($\varsigma_z$)
+            Amplitude of the $z_{\rm ob}$ probability distribution function ($\varsigma_z$)
         z_tab_integ: int
             Number of points to be used for z_obs integration.
         lambda_tab_integ: list
@@ -144,7 +144,7 @@ class AnalyticSelectionFunction:
         r"""
         Statistical uncertainty on the observed mass proxy.
 
-        Computes the scatter of the observed richness PDF
+        Computes the scatter of the observed richness probability distribution function
         at the requested true redshift and richness points.
 
         ..math:
@@ -250,9 +250,9 @@ class AnalyticSelectionFunction:
 
     def _prob_lambda_obs(self, z, lambda_true, lambda_obs):
         r"""
-        Observed mass proxy PDF.
+        Observed mass proxy probability distribution function.
 
-        Computes the observed richness PDF at the requested
+        Computes the observed richness probability distribution function at the requested
         true richness, true redshift, and observed richness points
 
         ..math:
@@ -272,7 +272,7 @@ class AnalyticSelectionFunction:
         Returns
         -------
         prob_lambda_obs: numpy.ndarray
-            Observed mass proxy PDF.
+            Observed mass proxy probability distribution function.
         """
 
         mu = self._mu_lambda_obs(z, lambda_true)
@@ -293,7 +293,7 @@ class AnalyticSelectionFunction:
         r"""
         Statistical uncertainty on the observed redshift.
 
-        Computes the scatter of the observed redshift PDF
+        Computes the scatter of the observed redshift probability distribution function
         at the requested true redshift, true richness, and observed richness points.
 
         ..math:
@@ -335,9 +335,9 @@ class AnalyticSelectionFunction:
 
     def _prob_z_obs(self, z_obs, lambda_obs, z_true, lambda_true):
         r"""
-        Observed redshift PDF.
+        Observed redshift probability distribution function.
 
-        Computes the observed redshift PDF at the requested
+        Computes the observed redshift probability distribution function at the requested
         true richness, true redshift, and observed redshift points.
 
         Parameters
@@ -354,7 +354,7 @@ class AnalyticSelectionFunction:
         Returns
         -------
         numpy.ndarray
-            Observed redshift PDF.
+            Observed redshift probability distribution function.
         """
         return gaussian(
             z_obs, z_true, self.scatter_z_obs(lambda_obs, z_true, lambda_true)
@@ -488,7 +488,7 @@ class AnalyticSelectionFunction:
             \int_{\Delta\lambda_{\rm obs}} d\lambda_{\rm obs}\,
             P(\lambda_{\rm obs} | \lambda_{\rm true}, z_{\rm true})
 
-        The CDF of the distribution has a closed form:
+        The cumulative distribution function of the distribution has a closed form:
 
         ..math:
             F(\lambda_{\rm obs}) =
@@ -496,7 +496,7 @@ class AnalyticSelectionFunction:
             - f^{\rm prj} \exp\left[-\tau(\lambda_{\rm obs} - \mu) + \frac{\tau^2\sigma^2}{2}\right]
             \Phi\left(\frac{\lambda_{\rm obs} - \mu}{\sigma} - \tau\sigma\right)
 
-        with :math:`\Phi` the standard normal CDF (the Gaussian and the
+        with :math:`\Phi` the standard normal cumulative distribution function (the Gaussian and the
         exponentially modified Gaussian share the first term).
 
         and the bin integral is simply :math:`F(\lambda_{\rm obs}^{\rm high}) - F(\lambda_{\rm obs}^{\rm low})`.
@@ -534,7 +534,7 @@ class AnalyticSelectionFunction:
 
     @staticmethod
     def _cdf(lob, mu, sig, tau, f_prj):
-        # Gaussian CDF: Phi((lob-mu)/sigma)
+        # Gaussian cumulative distribution function: Phi((lob-mu)/sigma)
         gauss_cdf = 0.5 * (1.0 + spc.erf((lob - mu) / (np.sqrt(2.0) * sig)))
 
         # EMG correction: exp[-tau*(lob-mu) + 0.5*tau^2*sig^2] * Phi((lob-mu)/sig - tau*sig)
@@ -629,7 +629,7 @@ class AnalyticSelectionFunction:
             P(z_{\rm obs}|\lambda_{\rm obs}, \lambda_{\rm true}, z_{\rm true})
 
         Each richness bin is divided in sub-bins: the integral of the observed
-        richness PDF in each sub-bin is computed with its closed form (see
+        richness probability distribution function in each sub-bin is computed with its closed form (see
         `window_lambda_observed`), while the observed redshift window is evaluated
         at the center of the sub-bin.
 
