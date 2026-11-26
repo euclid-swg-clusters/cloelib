@@ -1,7 +1,7 @@
 # import jax.numpy as np
 
 import numpy as np
-from numpy.testing import assert_allclose
+from numpy.testing import assert_allclose, assert_equal, assert_raises
 
 from cloelib.cosmology.camb_cosmology import CAMBBackground, CAMBLinearPerturbations
 from cloelib.observables.halos.halo_abundance import CastroHaloAbundance
@@ -47,9 +47,6 @@ def test_array_shapes():
     _prof_kwargs = dict(
         two_halo="None",
         zs_max=2.0,
-        mean_nz=0.4,
-        sigma_nz=0.3,
-        alpha_nz=0.4,
     )
 
     profile_nfw = NFWHaloProfile(_get_halo_model_properties(), **_prof_kwargs)
@@ -91,7 +88,7 @@ def _test_profile(profile, reference_vals):
     M_test = np.array([5e14])
     c_test = 4.0
     z_sources_test = np.linspace(0.6, 1, 5)
-
+    mean_z_cl_test = np.linspace(0.2, 1.0, 4)
     castro = _get_castro()
     halo_bias = castro.bias(z_test, M_test)
 
@@ -100,10 +97,48 @@ def _test_profile(profile, reference_vals):
         profile.sigma_crit(z_test, z_sources_test)[0],
         **reference_vals["sigma_crit"],
     )
+    idx = np.array(
+        [
+            profile.get_tomo_bin_index(mean_z_cl_test[i])
+            for i in range(mean_z_cl_test.size)
+        ]
+    )
     print("    n_zs_norM")
-    assert_allclose(profile.n_zs_norM(z_test), **reference_vals["n_zs_norM"])
+    n_zs_norMs = np.array([profile.n_zs_norM(i) for i in idx])
+    assert_allclose(n_zs_norMs, **reference_vals["n_zs_norM"], atol=1.0e-5)
     print("    n_zs")
-    assert_allclose(profile.n_zs(z_test)[0][:5], **reference_vals["n_zs"])
+    nzs = np.array(
+        [profile.n_zs(z_sources_test, idx[i]) for i in range(mean_z_cl_test.size)]
+    )
+    assert_allclose(nzs, **reference_vals["n_zs"], atol=1.0e-5)
+    print("    sigma_crit_inv_eff")
+    # sources selected at the true redshift: tomographic bins 1, 3, 4, 5
+    z_true_test = np.linspace(0.2, 1.0, 4)
+    assert_equal(
+        [profile.get_tomo_bin_index(z_true) for z_true in z_true_test], [1, 3, 4, 5]
+    )
+    assert_allclose(
+        profile.sigma_crit_inv_eff(z_true_test),
+        **reference_vals["sigma_crit_inv_eff"],
+    )
+    # larger signal for the clusters just above an edge - Delta_z (one bin less,
+    # the sources in front of the cluster are removed); above the last one there
+    # are no sources (tested below)
+    for z_edge in profile.z_min_tomo_bin[:-1] - 0.05:
+        below, above = profile.sigma_crit_inv_eff(
+            np.array([z_edge - 1e-6, z_edge + 1e-6])
+        )
+        assert above > below > 0.0
+    print("    sigma_crit_inv_eff without sources behind the cluster")
+    # no tomographic bin with lower edge above z + Delta_z, or z >= zs_max: zero
+    assert profile.get_tomo_bin_index(profile.z_min_tomo_bin[-1]) is None
+    z_lens_edge = np.array(
+        [0.5, profile.z_min_tomo_bin[-1], profile.zs_max, profile.zs_max + 0.1]
+    )
+    sigma_crit_inv_eff = profile.sigma_crit_inv_eff(z_lens_edge)
+    assert np.all(np.isfinite(sigma_crit_inv_eff))
+    assert sigma_crit_inv_eff[0] > 0.0
+    assert_equal(sigma_crit_inv_eff[1:], 0.0)
     print("    surface_mass_density")
     assert_allclose(
         profile.surface_mass_density(R_test, z_test, M_test, c_test)[:, 0, 0],
@@ -146,9 +181,6 @@ def test_profiles():
     _prof_kwargs = dict(
         two_halo="None",
         zs_max=2.0,
-        mean_nz=0.4,
-        sigma_nz=0.3,
-        alpha_nz=0.4,
     )
     profile_nfw = NFWHaloProfile(_get_halo_model_properties(), **_prof_kwargs)
     _reference_vals = {
@@ -163,16 +195,24 @@ def test_profiles():
             ],
             "rtol": 1e-5,
         },
-        "n_zs_norM": {"desired": [1.04925, 1.156374, 1.424675, 2.067442], "rtol": 1e-5},
+        # external values (scipy.stats.skewnorm), tomographic bins 1, 3, 4, 5
+        "n_zs_norM": {
+            "desired": [1.04263605, 1.1052296, 1.22485153, 1.5682325],
+            "rtol": 1e-5,
+        },
         "n_zs": {
             "desired": [
-                3.445074e-01,
-                3.52638e-01,
-                3.6089e-01,
-                3.69262e-01,
-                3.77753e-01,
+                [0.8297683, 0.85528035, 0.8339634, 0.78143239, 0.71159758],
+                [0.29190245, 0.5992073, 0.84143889, 0.92745608, 0.9132132],
+                [0.08161356, 0.18759727, 0.34873944, 0.53502114, 0.69604213],
+                [0.05745887, 0.08999008, 0.1344094, 0.19160809, 0.26094458],
             ],
-            "rtol": 1e-3,
+            "rtol": 1e-5,
+        },
+        # external values: independent integration with the same cosmology and n(z)
+        "sigma_crit_inv_eff": {
+            "desired": [1.868098e-04, 2.474147e-04, 2.033727e-04, 1.513822e-04],
+            "rtol": 1e-4,
         },
         "surface_mass_density": {
             "desired": [57.782346, 60.278322, 62.62685, 64.791899],
@@ -212,12 +252,46 @@ def test_profiles():
         two_halo="None",
         trunc_fact=3.0,
         zs_max=2.0,
-        mean_nz=0.4,
-        sigma_nz=0.3,
-        alpha_nz=0.4,
     )
     profile_bmo = BMOHaloProfile(_get_halo_model_properties(), **_prof_kwargs)
     _test_profile(profile_bmo, _reference_vals)
+
+
+def test_source_redshift_distribution():
+    print("# Source redshift distribution")
+    halo_model_properties = _get_halo_model_properties()
+    nz_kwargs = dict(
+        mean_nz=np.array([0.3, 0.6]),
+        sigma_nz=np.array([0.5, 0.7]),
+        alpha_nz=np.array([2.0, 3.0]),
+        z_min_tomo_bin=np.array([0.5, 0.9]),
+    )
+    z = np.array([0.3, 0.5])
+
+    for profile_class in (
+        NFWHaloProfile,
+        BMOHaloProfile,
+        EmulatorMiscenteredHaloProfile,
+    ):
+        print(f"  {profile_class.__name__}")
+        # parameters reach the parent class, that uses them
+        profile = profile_class(halo_model_properties, zs_max=2.0, **nz_kwargs)
+        for name, value in nz_kwargs.items():
+            assert_equal(getattr(profile, name), value)
+        assert profile.get_tomo_bin_index(0.4) == 0
+        assert profile.get_tomo_bin_index(0.6) == 1
+        # same default parameters given explicitly: same result
+        default = profile_class(halo_model_properties, zs_max=2.0)
+        explicit = profile_class(
+            halo_model_properties,
+            zs_max=2.0,
+            **{name: getattr(default, name) for name in nz_kwargs},
+        )
+        assert_equal(explicit.sigma_crit_inv_eff(z), default.sigma_crit_inv_eff(z))
+        assert np.all(profile.sigma_crit_inv_eff(z) != default.sigma_crit_inv_eff(z))
+        # inconsistent number of tomographic bins
+        with assert_raises(ValueError):
+            profile_class(halo_model_properties, mean_nz=np.array([0.3, 0.6]))
 
 
 def _test_misc_profile(profile, reference_vals):
@@ -408,9 +482,6 @@ def test_misc_profile():
 
     _prof_kwargs = dict(
         zs_max=2.0,
-        mean_nz=0.4,
-        sigma_nz=0.3,
-        alpha_nz=0.4,
     )
     profile_misc = EmulatorMiscenteredHaloProfile(
         _get_halo_model_properties(), **_prof_kwargs

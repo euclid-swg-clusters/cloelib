@@ -204,19 +204,13 @@ class ClusterWeakLensing:
         z_obs_edges_size = len(z_obs_edges) - 1
 
         # Effective inverse critical surface mass density : (z_obs, ztrue)
-        effective_inverse_critical_surface_mass_density = np.zeros(
-            (
-                z_obs_edges_size,
-                self.cluster_statitstics_modeling.tabulated_integrands["ztrue"].size,
-            )
+        # the sources are selected at the true redshift of the clusters
+        effective_inverse_critical_surface_mass_density = np.tile(
+            self.profile.sigma_crit_inv_eff(
+                self.cluster_statitstics_modeling.tabulated_integrands["ztrue"]
+            ),
+            (z_obs_edges_size, 1),
         )
-        for ind_z in range(z_obs_edges_size):
-            effective_inverse_critical_surface_mass_density[ind_z] = (
-                self.profile.sigma_crit_inv_eff(
-                    self.cluster_statitstics_modeling.tabulated_integrands["ztrue"],
-                    ind_z,
-                )
-            )
 
         # output : (z_obs, lambda_obs, radius)
         opt_sel_corr = 1
