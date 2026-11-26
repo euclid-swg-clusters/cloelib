@@ -45,11 +45,13 @@ class ClusterWeakLensing:
         Delta_profile = profile.overdensity_type
         if isinstance(halo_abundance, CastroHaloAbundance) and Delta_profile != "vir":
             raise ValueError(
-                f"If the Castro HMF is used, only virial overdensities can be considered. The current overdensity in the profile modeling is {Delta_profile}."
+                f"If the Castro HMF is used, only virial overdensities can be considered. "
+                f"The current overdensity in the profile modeling is {Delta_profile}."
             )
         if Delta_abundance != Delta_profile:
             raise ValueError(
-                f"The overdensity definition of the mass profile ({Delta_profile}) differs from the one adopted for halo abundance modeling ({Delta_abundance}).)"
+                f"The overdensity definition of the mass profile ({Delta_profile}) differs "
+                f"from the one adopted for halo abundance modeling ({Delta_abundance}).)"
             )
 
         # cluster counts summary statistics, contains tables for integrals
@@ -68,6 +70,7 @@ class ClusterWeakLensing:
         lambda_obs_edges,
         radius_edges,
         effective_inverse_critical_surface_mass_density=None,
+        return_intermediate_products=False,
     ):
         """Compute weak lensing profile, it can be excess surface density or reduced shear.
 
@@ -78,38 +81,49 @@ class ClusterWeakLensing:
         lambda_obs_edges : numpy.ndarray
             Edges of richness bins for the integration.
         radius_edges : numpy.ndarray
-            Edges of radial bins for the profile.
+            Edges of radial bins for the profile, computed at the center of the bins.
         effective_inverse_critical_surface_mass_density : numpy.array, None
             The effective inverse of the critical surface density.
             If provided, it must be shape (ztrue, M, radius) and this function
             returns the reduced shear, else it returns the excess surface density.
+        return_intermediate_products : bool
+            If true, returns also the intermediate integration products.
 
         Returns
         -------
         wl_profile_mean_values : numpy.ndarray
             Weak lensing quantity (excess surface density or reduced shear) in redshift,
             richness, and radial bins.
-        """
+        intermediate_integration_products (optional) : dict
+            Dictionary with intermediate products that can be used by
+            ClusterWeakLensingCovariance.get_gt_covariance.
+            Returned only when `return_intermediate_products` is true.
+            Contains :
 
+                * window_redshift_lambda_obs (numpy.ndarray) : P(lambda_obs_bin, z_obs_bin|M, ztrue), (z_obs, lambda_obs, ztrue, M).
+                * number_density (numpy.ndarray) : Integral of P(lambda_obs_bin, z_obs_bin|M, ztrue)*dn/dM over mass, (z_obs, lambda_obs, ztrue).
+                * cluster_counts (numpy.ndarray) : Number counts in redshift and richness bins, (z_obs, lambda_obs).
+        """
         ############################################
         # Get cluster statistics modeling quantities
         ############################################
-
-        # integral of P(z_obs|lambda_obs, z) on z_obs bins : (z_obs, lambda_obs, ztrue)
-        window_z_obs = self.cluster_statitstics_modeling.window_z_observed(
-            z_obs_edges, lambda_obs_edges
+        # P(lambda_obs_bin,z_obs_bin|M, z): (z_obs_bin,lambda_obs_bin, ztrue, mass)
+        window_redshift_lambda_obs = (
+            self.cluster_statitstics_modeling.window_redshift_richness_observed(
+                z_obs_edges, lambda_obs_edges
+            )
         )
-        # integral of P(lambda_obs|M, z) on lambda_obs bins : (lambda_obs, M, ztrue)
-        window_lambda_obs = self.cluster_statitstics_modeling.window_richness_observed(
-            lambda_obs_edges
+        # integral of P(lambda_obs_bin,z_obs_bin|M, z)*dn/dM over mass : (z_obs, lambda_obs, ztrue)
+        number_density = (
+            self.cluster_statitstics_modeling.integrate_probe_function_in_mass(
+                np.ones((1, 1)), window_redshift_lambda_obs
+            )
         )
         # cluster counts : (z_obs, lambda_obs)
-        cluster_counts = self.cluster_statitstics_modeling.integrate_probe_function_in_redshift(
-            # integral of P(lambda_obs|M, z)*dn/dM on lambda_obs bins and mass : (lambda_obs, ztrue)
-            self.cluster_statitstics_modeling.integrate_probe_function_in_mass(
-                np.ones((1, 1)), window_lambda_obs
-            ),
-            window_z_obs,
+        cluster_counts = (
+            self.cluster_statitstics_modeling.integrate_probe_function_in_redshift(
+                number_density
+            )
         )
 
         ########################
@@ -118,39 +132,60 @@ class ClusterWeakLensing:
 
         # mass/richness part
 
-        # excess surface mass density : (ztrue, M, radius)
+        # excess surface mass density at the center of the radial bins : (ztrue, M, radius)
+        # the halo bias is used only if the profile includes the 2-halo term
         excess_surface_mass_density = self.profile.excess_surface_mass_density(
-            radius_edges[:-1],
+            0.5 * (radius_edges[:-1] + radius_edges[1:]),
             self.cluster_statitstics_modeling.tabulated_integrands["ztrue"],
             self.cluster_statitstics_modeling.tabulated_integrands["M"],
             self.halo_concentration,
+            halo_bias=self.cluster_statitstics_modeling.tabulated_integrands[
+                "bias(ztrue,M)"
+            ],
         )
-        # excess surface mass density in a richness bin, integrated on mass w HMF : (lambda_obs, ztrue, radius)
+        # excess surface mass density in a richness bin, integrated on mass w HMF
+        # Dimension: (z_obs_bin, lambda_obs_bin, ztrue, radius)
         excess_surface_density_in_window_lambda_obs_mass_integrated = (
             self.cluster_statitstics_modeling.integrate_probe_function_in_mass(
-                excess_surface_mass_density, window_lambda_obs
+                excess_surface_mass_density,
+                window_redshift_lambda_obs[:, :, :, :, np.newaxis],
             )
         )
 
         # redshift part
 
         # Apply effective inverse critical surface mass density if provided
-        window_z_obs_use = window_z_obs
         if effective_inverse_critical_surface_mass_density is not None:
-            window_z_obs_use *= effective_inverse_critical_surface_mass_density[
-                :, np.newaxis, :
-            ]
+            excess_surface_density_in_window_lambda_obs_mass_integrated *= (
+                effective_inverse_critical_surface_mass_density[
+                    :, np.newaxis, :, np.newaxis
+                ]
+            )
 
         # output : (z_obs, lambda_obs, radius)
         wl_profile_mean_values = (
             self.cluster_statitstics_modeling.integrate_probe_function_in_redshift(
                 excess_surface_density_in_window_lambda_obs_mass_integrated,
-                window_z_obs_use,
             )
         ) / cluster_counts[:, :, np.newaxis]
-        return wl_profile_mean_values
 
-    def get_DeltaSigma(self, z_obs_edges, lambda_obs_edges, radius_edges):
+        if not return_intermediate_products:
+            return wl_profile_mean_values
+
+        intermediate_integration_products = {
+            "window_redshift_lambda_obs": window_redshift_lambda_obs,
+            "number_density": number_density,
+            "cluster_counts": cluster_counts,
+        }
+        return wl_profile_mean_values, intermediate_integration_products
+
+    def get_DeltaSigma(
+        self,
+        z_obs_edges,
+        lambda_obs_edges,
+        radius_edges,
+        return_intermediate_products=False,
+    ):
         """Compute excess surface density profile.
 
         Parameters
@@ -160,12 +195,23 @@ class ClusterWeakLensing:
         lambda_obs_edges : numpy.ndarray
             Edges of richness bins for the integration.
         radius_edges : numpy.ndarray
-            Edges of radial bins for the profile.
+            Edges of radial bins for the profile, computed at the center of the bins.
+        return_intermediate_products : bool
+            If true, returns also the intermediate integration products.
 
         Returns
         -------
         deltasigma_mean_values : numpy.ndarray
             Excess surface density in redshift, richness, and radial bins.
+        intermediate_integration_products (optional) : dict
+            Dictionary with intermediate products that can be used by
+            ClusterWeakLensingCovariance.get_gt_covariance.
+            Returned only when `return_intermediate_products` is true.
+            Contains :
+
+                * window_redshift_lambda_obs (numpy.ndarray) : P(lambda_obs_bin, z_obs_bin|M, ztrue), (z_obs, lambda_obs, ztrue, M).
+                * number_density (numpy.ndarray) : Integral of P(lambda_obs_bin, z_obs_bin|M, ztrue)*dn/dM over mass, (z_obs, lambda_obs, ztrue).
+                * cluster_counts (numpy.ndarray) : Number counts in redshift and richness bins, (z_obs, lambda_obs).
         """
         # output : (z_obs, lambda_obs, radius)
         return self._get_profile(
@@ -173,10 +219,16 @@ class ClusterWeakLensing:
             lambda_obs_edges,
             radius_edges,
             effective_inverse_critical_surface_mass_density=None,
+            return_intermediate_products=return_intermediate_products,
         )
 
     def get_gt(
-        self, z_obs_edges, lambda_obs_edges, radius_edges, opt_sel_bias_params=None
+        self,
+        z_obs_edges,
+        lambda_obs_edges,
+        radius_edges,
+        opt_sel_bias_params=None,
+        return_intermediate_products=False,
     ):
         """Compute reduced shear profile.
 
@@ -187,85 +239,103 @@ class ClusterWeakLensing:
         lambda_obs_edges : numpy.ndarray
             Edges of richness bins for the integration.
         radius_edges : numpy.ndarray
-            Edges of radial bins for the profile.
+            Edges of radial bins for the profile, computed at the center of the bins.
         opt_sel_bias_params: tuple, None
             If not None, applies the optical selection bias correction to the
             profile multiplying it by
-            ``self.optical_selection_bias_correction(radius_edges, *opt_sel_bias_params)``.
-            The values must be `opt_sel_bias_params=(R0, A, alpha, beta, gamma)``,
+            ``self.optical_selection_bias_correction(radius_mean, *opt_sel_bias_params)``,
+            with ``radius_mean`` the centers of the radial bins.
+            The values must be ``opt_sel_bias_params=(R0, A, alpha, beta, gamma)``,
             where each individual parameter must be either float or have shape
-            (redshift, richness, radius) bins.
+            (redshift, richness) bins.
+        return_intermediate_products : bool
+            If true, returns also the intermediate integration products.
 
         Returns
         -------
         gt_mean_values : numpy.ndarray
            Reduced shear in redshift, richness, and radial bins.
+        intermediate_integration_products (optional) : dict
+            Dictionary with intermediate products that can be used by
+            ClusterWeakLensingCovariance.get_gt_covariance.
+            Returned only when `return_intermediate_products` is true.
+            Contains :
+
+                * window_redshift_lambda_obs (numpy.ndarray) : P(lambda_obs_bin, z_obs_bin|M, ztrue), (z_obs, lambda_obs, ztrue, M).
+                * number_density (numpy.ndarray) : Integral of P(lambda_obs_bin, z_obs_bin|M, ztrue)*dn/dM over mass, (z_obs, lambda_obs, ztrue).
+                * cluster_counts (numpy.ndarray) : Number counts in redshift and richness bins, (z_obs, lambda_obs).
         """
         z_obs_edges_size = len(z_obs_edges) - 1
 
         # Effective inverse critical surface mass density : (z_obs, ztrue)
-        effective_inverse_critical_surface_mass_density = np.zeros(
-            (
-                z_obs_edges_size,
-                self.cluster_statitstics_modeling.tabulated_integrands["ztrue"].size,
-            )
+        # the sources are selected at the true redshift of the clusters
+        effective_inverse_critical_surface_mass_density = np.tile(
+            self.profile.sigma_crit_inv_eff(
+                self.cluster_statitstics_modeling.tabulated_integrands["ztrue"]
+            ),
+            (z_obs_edges_size, 1),
         )
-        for ind_z in range(z_obs_edges_size):
-            effective_inverse_critical_surface_mass_density[ind_z] = (
-                self.profile.sigma_crit_inv_eff(
-                    self.cluster_statitstics_modeling.tabulated_integrands["ztrue"],
-                    ind_z,
-                )
-            )
 
         # output : (z_obs, lambda_obs, radius)
         opt_sel_corr = 1
         if opt_sel_bias_params is not None:
+            # correction at the center of the radial bins : (z_obs, lambda_obs, radius)
             opt_sel_corr = self.optical_selection_bias_correction(
-                radius_edges, *opt_sel_bias_params
+                0.5 * (radius_edges[:-1] + radius_edges[1:]),
+                *(np.asarray(par)[..., np.newaxis] for par in opt_sel_bias_params),
             )
-        return (
-            self._get_profile(
-                z_obs_edges,
-                lambda_obs_edges,
-                radius_edges,
-                effective_inverse_critical_surface_mass_density,
-            )
-            * opt_sel_corr
+        profile = self._get_profile(
+            z_obs_edges,
+            lambda_obs_edges,
+            radius_edges,
+            effective_inverse_critical_surface_mass_density,
+            return_intermediate_products=return_intermediate_products,
         )
+        if not return_intermediate_products:
+            return profile * opt_sel_corr
+        gt_mean_values, intermediate_integration_products = profile
+        return gt_mean_values * opt_sel_corr, intermediate_integration_products
 
     @staticmethod
     def optical_selection_bias_correction(R, R0, A, alpha, beta, gamma):
-        """
+        r"""
         Correction for the weak lensing optical selection bias to account for
         miscentering and projection effects. To be multiplied directly to the WL
         profile integrated in observed richness and redshift. Effect measured in
-        Ingrao et al. 2026 (https://doi.org/10.48550/arXiv.2605.02723).
+        Ingrao et al. 2026 (https://doi.org/10.48550/arXiv.2605.02723):
+
+        ..math:
+            B(R) = A \left(\frac{R}{R_0}\right)^{\alpha}
+            \left[1 + \left(\frac{R}{R_0}\right)^{\gamma}\right]^{\frac{\beta - \alpha}{\gamma}} + 1
+
+        so that the correction scales as :math:`R^\alpha` at small radii and as
+        :math:`R^\beta` at large radii.
 
         Parameters
         ----------
         R: numpy.ndarray
-            Radius of the profile in Mpc
-        R0: numpy.ndarray
-            Transition scale in Mpc, dimensions should be (z_obs_bins, lambda_obs_bins)
-        A: numpy.ndarray
-            Amplitude of the correction, dimensions should be (z_obs_bins, lambda_obs_bins)
-        alpha: numpy.ndarray
-            Slope at small radii, dimensions should be (z_obs_bins, lambda_obs_bins)
-        beta: numpy.ndarray
-            Slope at large radii, dimensions should be (z_obs_bins, lambda_obs_bins)
-        gamma: numpy.ndarray
-            Smoothness of the transition between slopes, dimensions should be (z_obs_bins, lambda_obs_bins)
+            Radius of the profile in Mpc/h
+        R0: float, numpy.ndarray
+            Transition scale in Mpc/h
+        A: float, numpy.ndarray
+            Amplitude of the correction
+        alpha: float, numpy.ndarray
+            Slope at small radii
+        beta: float, numpy.ndarray
+            Slope at large radii
+        gamma: float, numpy.ndarray
+            Smoothness of the transition between slopes
 
+        All parameters must be broadcastable with R.
 
-        Retruns
+        Returns
         -------
-            Correction for WL optical selection bias. Dimension (z_obs_bins, lambda_obs_bins)
+        numpy.ndarray
+            Correction for WL optical selection bias, with the broadcast shape of
+            the inputs.
         """
         # Note:
         # Reasonable values for the parameters are: R0=1.20cMpc/h, A=0.20, alpha=4.0,
         # beta=−0.3 , gamma=1.6
-        return (
-            A * (R / R0) ** alpha * (1 + (R / R0**gamma)) ** ((alpha - beta) / gamma)
-            + 1
-        )
+        x = R / R0
+        return A * x**alpha * (1 + x**gamma) ** ((beta - alpha) / gamma) + 1

@@ -34,16 +34,19 @@ class EmulatorMiscenteredHaloProfile(HaloProfileBase):
         Overdensity type passed to :class:`HaloProfileCore`.  Default ``"vir"``.
     overdensity : int, optional
         Overdensity value passed to :class:`HaloProfileCore`.  Default ``200``.
-    z : array_like, optional
-        Redshift grid for cosmological calculations.
     zs_max : float, optional
         Maximum source redshift for lensing calculations.
-    mean_nz : float, optional
-        Mean of the source redshift distribution.
-    sigma_nz : float, optional
-        Width of the source redshift distribution.
-    alpha_nz : float, optional
-        Shape parameter of the source redshift distribution.
+    mean_nz : np.ndarray, optional
+        Location parameter of the skew-normal source redshift distribution of
+        each tomographic bin (see `HaloProfileBase`).
+    sigma_nz : np.ndarray, optional
+        Scale parameter of the skew-normal source redshift distribution of each
+        tomographic bin (see `HaloProfileBase`).
+    alpha_nz : np.ndarray, optional
+        Skewness parameter of the skew-normal source redshift distribution of
+        each tomographic bin (see `HaloProfileBase`).
+    z_min_tomo_bin : np.ndarray, optional
+        Lower edge of each tomographic bin (see `HaloProfileBase`).
 
     Notes
     -----
@@ -67,22 +70,22 @@ class EmulatorMiscenteredHaloProfile(HaloProfileBase):
         halo_model_properties: HaloModelProperties,
         overdensity_type: str = "vir",
         overdensity: int = 200,
-        z: np.ndarray = np.linspace(1.0e-5, 6.0 - 1.0e-5, 500),
         zs_max: float = 2.0,
-        mean_nz: float = 0.4,
-        sigma_nz: float = 0.3,
-        alpha_nz: float = 0.4,
+        mean_nz: np.ndarray | None = None,
+        sigma_nz: np.ndarray | None = None,
+        alpha_nz: np.ndarray | None = None,
+        z_min_tomo_bin: np.ndarray | None = None,
     ):
         HaloProfileBase.__init__(
             self,
             halo_model_properties,
             overdensity_type=overdensity_type,
             overdensity=overdensity,
-            z=z,
             zs_max=zs_max,
             mean_nz=mean_nz,
             sigma_nz=sigma_nz,
             alpha_nz=alpha_nz,
+            z_min_tomo_bin=z_min_tomo_bin,
         )
 
         self._trunc_fact = None

@@ -17,11 +17,11 @@ class HaloProfileBase:
         halo_model_properties: HaloModelProperties,
         overdensity_type: str = "vir",
         overdensity: int = 200,
-        z=np.linspace(1.0e-5, 6.0 - 1.0e-5, 500),
         zs_max: float = 4.0,
-        mean_nz: float = 0.4,
-        sigma_nz: float = 0.3,
-        alpha_nz: float = 0.4,
+        mean_nz: np.ndarray | None = None,
+        sigma_nz: np.ndarray | None = None,
+        alpha_nz: np.ndarray | None = None,
+        z_min_tomo_bin: np.ndarray | None = None,
     ):
         r"""Parent class computing quantities used in mass profile models.
 
@@ -31,21 +31,78 @@ class HaloProfileBase:
         ----------
         halo_model_properties : HaloModelProperties
             An object from the `HaloModelProperties` class.
+        mean_nz : np.ndarray
+            Location parameter of the skew-normal redshift distribution of the
+            sources in the tomographic bins >= t,
+            shape (Number of tomographic source redshift bins,).
+        sigma_nz : np.ndarray
+            Scale parameter of the skew-normal redshift distribution of the
+            sources in the tomographic bins >= t,
+            shape (Number of tomographic source redshift bins,).
+        alpha_nz : np.ndarray
+            Skewness parameter of the skew-normal redshift distribution of the
+            sources in the tomographic bins >= t,
+            shape (Number of tomographic source redshift bins,).
+        z_min_tomo_bin : np.ndarray
+            Lower edge of each tomographic bin t, in increasing order,
+            shape (Number of tomographic source redshift bins,), used to select
+            the first tomographic bin of the source sample (see `get_tomo_bin_index`).
+
+        Notes
+        -----
+        For a cluster with observed redshift z_obs, the source sample consists
+        of the galaxies in the tomographic bins t, t+1, ..., where t is the first
+        tomographic bin with lower edge larger than z_obs + Delta_z. In the model,
+        z_obs is approximated by the true redshift of the cluster (see
+        `sigma_crit_inv_eff`). Its redshift distribution is modeled with a
+        skew-normal distribution of parameters (alpha_nz[t], mean_nz[t], sigma_nz[t]),
+        normalized between 0 and zs_max: the sources in front of the cluster are
+        part of the sample, with zero lensing signal.
         """
         self.halo_model_properties = halo_model_properties
         self.overdensity_type = overdensity_type
         self.overdensity = overdensity
-
-        # ???
-        self.z = z
         self.zs_max = zs_max
-        self.mean_nz = mean_nz
-        self.sigma_nz = sigma_nz
-        self.alpha_nz = alpha_nz
-
-        # ??? evaluated at true redshift
-        self.nzsnorM = np.vectorize(self.n_zs_norM)(self.z)
-        self.nzs = self.n_zs(self.z)
+        self.mean_nz = np.atleast_1d(
+            mean_nz
+            if mean_nz is not None
+            else np.array(
+                [0.18739829, 0.33775482, 0.50338379, 0.66827123, 0.86322198, 1.30780699]
+            )
+        )
+        self.sigma_nz = np.atleast_1d(
+            sigma_nz
+            if sigma_nz is not None
+            else np.array(
+                [0.85102341, 0.77623404, 0.74479123, 0.79814509, 0.85482975, 0.77782535]
+            )
+        )
+        self.alpha_nz = np.atleast_1d(
+            alpha_nz
+            if alpha_nz is not None
+            else np.array(
+                [7.4511585, 3.12760121, 3.24293517, 6.36498593, 4.32074969, 1.50975262]
+            )
+        )
+        self.z_min_tomo_bin = np.atleast_1d(
+            z_min_tomo_bin
+            if z_min_tomo_bin is not None
+            else np.array([0.2398, 0.3117, 0.4304, 0.6960, 0.8876, 1.1267])
+        )
+        sizes = [
+            par.size
+            for par in (
+                self.mean_nz,
+                self.sigma_nz,
+                self.alpha_nz,
+                self.z_min_tomo_bin,
+            )
+        ]
+        if len(set(sizes)) != 1:
+            raise ValueError(
+                "mean_nz, sigma_nz, alpha_nz and z_min_tomo_bin must have the same "
+                f"size (number of tomographic bins), got {sizes}."
+            )
 
     @property
     def background(self):
@@ -97,91 +154,143 @@ class HaloProfileBase:
 
         return 1e-12 * sig_crit / self.background.h  # Msun pc^{-2} h
 
-    def n_zs_norM(self, z):
+    def get_tomo_bin_index(self, z_obs, Delta_z=0.05):
         r"""
-        Galaxy number density normalization.
+        Select the first tomographic bin of the source sample.
 
-        Computes the galaxy number density normalization given a lens redshift.
+        Returns the first index t such that z_min_tomo_bin[t] > z_obs + Delta_z,
+        i.e. the sources are the galaxies in the tomographic bins t, t+1, ...
 
         Parameters
         ----------
-        z: float or np.ndarray
-            Lens redshift.
+        z_obs : float
+            Observed redshift of the cluster.
+        Delta_z : float, optional
+            Minimum redshift separation between the clusters and the lower edge of
+            the tomographic bins of the sources.
 
         Returns
         -------
-        n_zs_norM: float or np.ndarray
-            Galaxy number density normalization per redshift
+        idx: int or None
+            Index into mean_nz/sigma_nz/alpha_nz/z_min_tomo_bin, None if no
+            tomographic bin satisfies the condition.
         """
-        n_zs_norM = 1.0 / (
+        mask = self.z_min_tomo_bin > z_obs + Delta_z
+        if not np.any(mask):
+            return None
+        return int(np.argmax(mask))
+
+    def n_zs_norM(self, idx):
+        r"""
+        Normalization of the source redshift distribution between 0 and zs_max.
+
+        Parameters
+        ----------
+        idx: int
+            Index into mean_nz/sigma_nz/alpha_nz for the tomographic bin,
+            as returned by `get_tomo_bin_index`.
+
+        Returns
+        -------
+        n_zs_norM: float
+            Inverse of the integral of `n_zs` between 0 and zs_max.
+        """
+        return 1.0 / (
             skewnorm.cdf(
                 self.zs_max,
-                self.alpha_nz,
-                self.mean_nz,
-                self.sigma_nz,
+                self.alpha_nz[idx],
+                self.mean_nz[idx],
+                self.sigma_nz[idx],
             )
             - skewnorm.cdf(
-                z,
-                self.alpha_nz,
-                self.mean_nz,
-                self.sigma_nz,
+                0.0,
+                self.alpha_nz[idx],
+                self.mean_nz[idx],
+                self.sigma_nz[idx],
             )
         )
 
-        return n_zs_norM
-
-    def n_zs(self, z):
+    def n_zs(self, z, idx):
         r"""
-        Galaxy number density.
-
-        Computes the galaxy number density given a lens redshift.
+        Redshift distribution of the sources.
 
         Parameters
         ----------
         z: float or np.ndarray
-            Lens redshift.
+            Source redshift.
+        idx: int
+            Index into mean_nz/sigma_nz/alpha_nz for the tomographic bin,
+            as returned by `get_tomo_bin_index`.
 
         Returns
         -------
         n_zs: float or np.ndarray
-            Galaxy number density per redshift
+            Skew-normal redshift distribution of the sources in the tomographic
+            bins >= idx, at the source redshift z (not normalized)
         """
-        n_zs = np.zeros((z.size, len(self.z)))
-        for z_ind, _z in enumerate(z):
-            z_s = np.linspace(_z + 1.0e-10, self.zs_max, len(self.z))
-            n_zs[z_ind] = skewnorm.pdf(
-                z_s,
-                self.alpha_nz,
-                self.mean_nz,
-                self.sigma_nz,
-            )
+        return skewnorm.pdf(
+            z,
+            self.alpha_nz[idx],
+            self.mean_nz[idx],
+            self.sigma_nz[idx],
+        )
 
-        return n_zs
-
-    def sigma_crit_inv_eff(self, z, zbin):
+    def sigma_crit_inv_eff(self, z, Delta_z=0.05, z_grid_size=50):
         r"""
         Effective inverse critical surface mass density.
 
-        Computes the effective critical surface mass density at
-        the given lens redshift.
+        Computes the effective inverse critical surface mass density at
+        the true cluster redshift:
+
+        ..math:
+            \langle \Sigma_{\rm crit}^{-1} \rangle(z) =
+            \frac{\int_{z}^{z_{\rm s,max}} dz_s\, n_t(z_s)\, \Sigma_{\rm crit}^{-1}(z, z_s)}
+            {\int_{0}^{z_{\rm s,max}} dz_s\, n_t(z_s)}
+
+        where n_t is the redshift distribution of the sources in the tomographic
+        bins t, t+1, ... selected with `get_tomo_bin_index`, approximating the
+        observed redshift of the cluster with its true redshift. The sources in
+        front of the cluster have zero lensing signal. The result is zero if no
+        tomographic bin satisfies the condition, or for z >= zs_max.
 
         Parameters
         ----------
-        z: float or np.ndarray
-            Lens redshift.
-        zbin: int
-            Index of the lens redshift bin.
+        z: np.ndarray
+            True cluster redshift.
+        Delta_z : float, optional
+            Minimum redshift separation between the clusters and the lower edge of
+            the tomographic bins of the sources.
+        z_grid_size: int, optional
+            Number of source-redshift grid points used for the quadrature
 
         Returns
         -------
-        m_sigma_crit_m1: float
+        m_sigma_crit_m1: np.ndarray
             Effective inverse critical surface mass density (units : pc^2 / Msun / h)
         """
-        # z_s is temporarily hard-coded
-        z_s = np.linspace(z + 1.0e-10, self.zs_max, len(self.z), axis=1)
-        sig_crit_m1 = self.nzs[zbin] * 1.0 / self.sigma_crit(z, z_s)
+        z = np.asarray(z)
+        sig_crit_inv_eff = np.zeros(z.shape)
 
-        return self.nzsnorM[zbin] * simpson(sig_crit_m1, x=z_s)  # pc^2 / Msun / h
+        # first tomographic bin of the sources of each cluster (None: no sources)
+        tomo_bins = [self.get_tomo_bin_index(z_cl, Delta_z) for z_cl in z]
+
+        for ind_tomo in sorted({t for t in tomo_bins if t is not None}):
+            # clusters with these sources (no sources behind clusters with z >= zs_max)
+            clusters = np.array([t == ind_tomo for t in tomo_bins]) & (z < self.zs_max)
+            if not np.any(clusters):
+                continue
+            z_s = np.linspace(z[clusters], self.zs_max, z_grid_size, axis=1)
+            # last point slightly below zs_max, where the distances may not be tabulated
+            z_s[:, -1] = self.zs_max - 1.0e-5
+            with np.errstate(divide="ignore", invalid="ignore"):
+                # zero lensing for sources at the cluster redshift
+                sig_crit_m1 = self.n_zs(z_s, ind_tomo) / self.sigma_crit(
+                    z[clusters], z_s
+                )
+            sig_crit_inv_eff[clusters] = self.n_zs_norM(ind_tomo) * simpson(
+                np.nan_to_num(sig_crit_m1, nan=0.0, posinf=0.0), x=z_s
+            )  # pc^2 / Msun / h
+        return sig_crit_inv_eff
 
     def surface_mass_density_args(self, R, z, M, radius_units="Mpc/h"):
         r"""

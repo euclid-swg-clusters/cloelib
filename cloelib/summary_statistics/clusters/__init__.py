@@ -1,4 +1,4 @@
-from .cluster_covariance import ClusterCovariance
+from .cluster_covariance import ClusterCovariance, ClusterWeakLensingCovariance
 from .clustering import ClusterClustering
 from .counts import ClusterCounts
 from .lensing import ClusterWeakLensing
@@ -9,5 +9,6 @@ __all__ = [
     "ClusterCounts",
     "ClusterCovariance",
     "ClusterWeakLensing",
+    "ClusterWeakLensingCovariance",
     "ClusterStatisticsModeling",
 ]

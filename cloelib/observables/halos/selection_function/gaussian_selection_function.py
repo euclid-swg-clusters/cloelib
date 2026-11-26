@@ -108,7 +108,7 @@ class GaussianSelectionFunction:
             lambda_obs, lambda_true, self._scatter_lambda_obs(z, lambda_true)
         )
 
-    def scatter_z_obs(self, lambda_obs, z):
+    def scatter_z_obs(self, lambda_obs, z, lambda_true=None):
         r"""
         Statistical uncertainty on the observed redshift.
 
@@ -177,6 +177,11 @@ class GaussianSelectionFunction:
         window_z_obs : numpy.ndarray
             Integral of P(z_obs|lambda_obs, z_true) in z_obs bins.
             Dimensions: (len(z_obs_edges)-1, len(lambda_obs_edges)-1, len(z_true)).
+
+        Notes
+        -----
+        P(z_obs|lambda_obs, z_true) is evaluated at the lower edge of each lambda_obs
+        bin, neglecting its dependence on richness within the bin.
         """
 
         z_obs_bins_size = len(z_obs_edges) - 1
@@ -225,7 +230,7 @@ class GaussianSelectionFunction:
         -------
         window_lambda_obs : numpy.ndarray
             Integral of P(lambda_obs|\lambda_{\rm true}, z_true) in lambda_obs bins.
-            Dimensions: (len(lambda_obs_edges)-1, len(z_true), len(lambda_true)).
+            Dimensions: (len(lambda_obs_edges)-1, len(z_true), len(mass)).
         """
 
         lambda_obs_bins_size = len(lambda_obs_edges) - 1
