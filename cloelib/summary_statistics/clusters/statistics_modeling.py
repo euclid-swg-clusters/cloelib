@@ -12,8 +12,8 @@ from scipy.integrate import simpson
 
 # cloelib imports
 from cloelib.cosmology import derived_cosmology
-from cloelib.observables.clusters.halo_abundance import HaloAbundance
-from cloelib.observables.clusters.selection_function import SelectionFunction
+from cloelib.observables.halos.halo_abundance import HaloAbundance
+from cloelib.observables.halos.selection_function import SelectionFunction
 
 # import jax
 
@@ -71,11 +71,9 @@ class ClusterStatisticsModeling:
             Effective area of the survey in deg2.
         """
         # observable objects
+        self.area = area
         self.halo_abundance = halo_abundance
         self.selection_function = selection_function
-
-        # effective survey area in deg2
-        self.area = area
 
         # check the consistency between the selection function and the integration arrays
         self._numerical_sf = hasattr(selection_function, "_sel_cl_data")
@@ -94,8 +92,8 @@ class ClusterStatisticsModeling:
             )
 
         # check if the integration points lie within the interpolation ranges
-        if self.matter_statistics.interpolate_pk:
-            z_knots, k_knots = self.matter_statistics.Pk_interp_cb.get_knots()
+        if self.halo_model_properties.interpolate_pk:
+            z_knots, k_knots = self.halo_model_properties.Pk_interp_cb.get_knots()
             if (
                 integ_ztrue_arr.min() <= z_knots.min()
                 or integ_ztrue_arr.max() >= z_knots.max()
@@ -108,8 +106,8 @@ class ClusterStatisticsModeling:
                     "integ_k_arr points lie outside the P(k,z) interpolation range."
                 )
 
-        if self.matter_statistics.interpolate_da:
-            z_knots = self.matter_statistics.da_interp.get_knots()
+        if self.halo_model_properties.interpolate_da:
+            z_knots = self.halo_model_properties.da_interp.get_knots()
             if (
                 integ_ztrue_arr.min() <= z_knots.min()
                 or integ_ztrue_arr.max() >= z_knots.max()
@@ -126,7 +124,7 @@ class ClusterStatisticsModeling:
             "ztrue": integ_ztrue_arr,  # true redshift array
             # volume element at each point of z array
             "dv/dz(ztrue)": derived_cosmology.dV_dzdO(
-                self.matter_statistics.perturbations.background,
+                self.halo_model_properties.perturbations.background,
                 integ_ztrue_arr,
                 hubble_units=True,
             )
@@ -144,8 +142,8 @@ class ClusterStatisticsModeling:
         }
 
     @property
-    def matter_statistics(self):
-        return self.halo_abundance.core.matter_statistics
+    def halo_model_properties(self):
+        return self.halo_abundance.halo_model_properties
 
     # ----------------------------
     # cluster statistics functions
@@ -212,7 +210,7 @@ class ClusterStatisticsModeling:
         return self.selection_function.window_richness_observed(**kwargs)
 
     def window_redshift_richness_observed(self, z_obs_edges, lambda_obs_edges):
-        r"""Compute the window function of each observed richness and redhisft bin, given by:
+        r"""Compute the window function of each observed richness and redshift bin, given by:
 
         ..math:
             W_{\Delta\lambda_{\rm obs},\Delta\z_{\rm obs}}(M, z_{\rm true}) =
